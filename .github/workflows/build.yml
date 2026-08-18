@@ -15,7 +15,7 @@ jobs:
       - name: Test core
         run: dotnet run --project tests/PalSaveEditor.Core.Tests/PalSaveEditor.Core.Tests.csproj -c Release
       - name: Build solution
-        run: dotnet build PalSaveEditor.slnx -c Release --no-restore
+        run: dotnet build PalSaveEditor.slnx -c Release
       - name: Publish self-contained app
         run: >-
           dotnet publish src/PalSaveEditor.WinForms/PalSaveEditor.WinForms.csproj
