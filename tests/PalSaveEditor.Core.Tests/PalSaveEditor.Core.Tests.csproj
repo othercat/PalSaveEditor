@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>PalSaveEditor.Core.Tests</AssemblyName>
+    <RootNamespace>PalSaveEditor.Core.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/PalSaveEditor.Core/PalSaveEditor.Core.csproj" />
+  </ItemGroup>
+</Project>

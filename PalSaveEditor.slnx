@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/PalSaveEditor.Core/PalSaveEditor.Core.csproj" />
+  <Project Path="src/PalSaveEditor.WinForms/PalSaveEditor.WinForms.csproj" />
+  <Project Path="tests/PalSaveEditor.Core.Tests/PalSaveEditor.Core.Tests.csproj" />
+</Solution>
