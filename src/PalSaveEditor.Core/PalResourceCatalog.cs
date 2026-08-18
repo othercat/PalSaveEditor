@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Json;
 
 namespace PalSaveEditor.Core;
 
@@ -53,7 +54,8 @@ public sealed class PalResourceCatalog
     public static PalResourceCatalog Load(string gameDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(gameDirectory);
-        var fullDirectory = Path.GetFullPath(gameDirectory);
+        var requestedDirectory = Path.GetFullPath(gameDirectory);
+        var fullDirectory = TryResolveActiveProfileResources(requestedDirectory) ?? requestedDirectory;
         var wordPath = Path.Combine(fullDirectory, "WORD.DAT");
         if (!File.Exists(wordPath))
         {
@@ -163,6 +165,57 @@ public sealed class PalResourceCatalog
         if (parent is not null)
         {
             yield return parent.FullName;
+        }
+    }
+
+    private static string? TryResolveActiveProfileResources(string gameDirectory)
+    {
+        var profilesDirectory = Path.Combine(gameDirectory, "palmod", "Profiles");
+        var pointerPath = Path.Combine(profilesDirectory, "current.json");
+        if (!File.Exists(pointerPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var pointer = JsonDocument.Parse(File.ReadAllBytes(pointerPath));
+            if (!pointer.RootElement.TryGetProperty("staging_relative_path", out var relativeElement))
+            {
+                return null;
+            }
+
+            var relativePath = relativeElement.GetString();
+            if (string.IsNullOrWhiteSpace(relativePath) || Path.IsPathRooted(relativePath))
+            {
+                return null;
+            }
+
+            var profilesRoot = Path.GetFullPath(profilesDirectory);
+            var stagedDirectory = Path.GetFullPath(Path.Combine(profilesRoot, relativePath));
+            var profilesPrefix = profilesRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                                 Path.DirectorySeparatorChar;
+            if (!stagedDirectory.StartsWith(profilesPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var resourcesDirectory = Path.Combine(stagedDirectory, "resources");
+            return File.Exists(Path.Combine(resourcesDirectory, "WORD.DAT"))
+                ? resourcesDirectory
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
         }
     }
 

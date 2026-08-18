@@ -10,7 +10,14 @@ internal sealed class MainForm : Form
     private readonly ToolStripButton _saveButton = new("保存") { Enabled = false };
     private readonly ToolStripButton _saveAsButton = new("另存为") { Enabled = false };
     private readonly ToolStripButton _resourcesButton = new("游戏资料目录") { Enabled = false };
-    private readonly ToolStripComboBox _formatCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Enabled = false, Width = 190 };
+    private readonly ToolStripComboBox _formatCombo = new()
+    {
+        AutoSize = false,
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        DropDownWidth = 360,
+        Enabled = false,
+        Width = 330,
+    };
     private readonly ToolStripStatusLabel _status = new("请打开 1.RPG～5.RPG 存档");
     private readonly ToolStripStatusLabel _dirtyStatus = new() { Spring = true, TextAlign = ContentAlignment.MiddleRight };
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill, Enabled = false };
@@ -48,7 +55,14 @@ internal sealed class MainForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = new("Microsoft YaHei UI", 9F);
 
-        foreach (var format in new[] { SaveFormat.Auto, SaveFormat.PalWin95, SaveFormat.PalDos, SaveFormat.Dream220Dos })
+        foreach (var format in new[]
+                 {
+                     SaveFormat.Auto,
+                     SaveFormat.PalWin95,
+                     SaveFormat.PalDos,
+                     SaveFormat.Dream220Win95,
+                     SaveFormat.Dream220Dos,
+                 })
         {
             _formatCombo.Items.Add(new FormatChoice(format));
         }
@@ -105,7 +119,7 @@ internal sealed class MainForm : Form
             MessageBoxIcon.Information));
         help.DropDownItems.Add("关于", null, (_, _) => MessageBox.Show(
             this,
-            "仙剑存档编辑器\r\n支持：仙剑 98 柔情版、仙剑 DOS、仙剑梦幻 2.20。\r\n界面信息架构参考 PalEdit，解析与写入核心重新实现。",
+            "仙剑存档编辑器\r\n支持：仙剑 98 柔情版、仙剑 DOS、梦幻 2.20 DOS 版和 PALDLL 移植版。\r\n界面信息架构参考 PalEdit，解析与写入核心重新实现。",
             "关于",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information));

@@ -98,9 +98,9 @@ public sealed class PalSaveDocument
             catalog.WordDatByteLength,
             catalog.ObjectRecordSize,
             catalog.EventObjectBytes);
-        if (Detection.Format == SaveFormat.Dream220Dos)
+        if (Detection.Format is SaveFormat.Dream220Dos or SaveFormat.Dream220Win95)
         {
-            Format = SaveFormat.Dream220Dos;
+            Format = Detection.Format;
         }
     }
 

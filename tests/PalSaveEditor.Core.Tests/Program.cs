@@ -49,6 +49,7 @@ static void TestKnownFormatDetection()
     Equal(SaveFormat.PalDos, SaveFormatDetector.Detect(183_488).Format, "DOS detection");
     Equal(SaveFormat.PalWin95, SaveFormatDetector.Detect(176_528).Format, "Win detection");
     Equal(SaveFormat.Dream220Dos, SaveFormatDetector.Detect(184_672).Format, "Dream detection");
+    Equal(SaveFormat.Dream220Win95, SaveFormatDetector.Detect(185_872).Format, "PALDLL Dream detection");
 
     Throws<InvalidDataException>(() => SaveFormatDetector.Detect(14_065), "invalid event boundary");
 
@@ -131,6 +132,8 @@ static void TestRealSamples()
     var dosSave = @"D:\SteamLibrary\steamapps\common\PAL\PAL_DOS\0.RPG";
     var dreamDirectory = @"D:\Workspace\KnowledgeRoots\PAL\外塞之雾\仙剑梦幻2.20\pal";
     var dreamSave = Path.Combine(dreamDirectory, "1.rpg");
+    var palDllDreamDirectory = @"D:\Workspace\KnowledgeRoots\PAL\othercat\PALDLL_DX9-dream220-runtime\game";
+    var palDllDreamSave = Path.Combine(palDllDreamDirectory, "2.rpg");
 
     if (!File.Exists(winSave) || !File.Exists(dosSave) || !File.Exists(dreamSave))
     {
@@ -148,6 +151,23 @@ static void TestRealSamples()
     Equal(12, dream.Catalog.ObjectRecordSize, "Dream DOS objects");
     Equal(171_808, dream.Catalog.EventObjectBytes, "Dream events");
     Equal("經驗值", dream.Catalog.GetWord(2), "Dream Big5 word decoding");
+
+    if (File.Exists(palDllDreamSave))
+    {
+        var palDllDream = PalSaveDocument.Load(palDllDreamSave, gameDirectory: palDllDreamDirectory);
+        Equal(SaveFormat.Dream220Win95, palDllDream.Format, "PALDLL Dream save");
+        NotNull(palDllDream.Catalog, "PALDLL Dream catalog");
+        Equal(565, palDllDream.Catalog!.WordCount, "PALDLL Dream words");
+        Equal(14, palDllDream.Catalog.ObjectRecordSize, "PALDLL Dream Win95 objects");
+        Equal(171_808, palDllDream.Catalog.EventObjectBytes, "PALDLL Dream events");
+        True(!palDllDream.Detection.IsHeuristic, "PALDLL Dream profile resource proof");
+        True(palDllDream.Catalog.SourceDirectory.Contains("pal98.dream220.compat", StringComparison.OrdinalIgnoreCase),
+            "PALDLL Dream active profile resources");
+        Throws<InvalidDataException>(() => palDllDream.SetFormat(SaveFormat.Dream220Dos),
+            "reject DOS Dream layout for PALDLL Dream save");
+        palDllDream.SetFormat(SaveFormat.PalWin95);
+        Equal(SaveFormat.PalWin95, palDllDream.Format, "allow Win95 layout alias for PALDLL Dream save");
+    }
 
     var winCatalog = PalResourceCatalog.Load(Path.GetDirectoryName(winSave)!);
     Equal("状态", winCatalog.GetWord(3), "Win95 GBK word decoding");
