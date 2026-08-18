@@ -41,6 +41,11 @@ static void TestLayoutConstants()
     Equal(1_728, PalSaveLayout.InventoryOffset, "inventory offset");
     Equal(3_264, PalSaveLayout.SceneOffset, "scene offset");
     Equal(580, PalSaveLayout.RoleFieldOffset(RoleField.Level, 0), "role level offset");
+    Equal(784, PalSaveLayout.RoleFieldOffset(RoleField.WindResistance, 0), "role wind resistance offset");
+    Equal(796, PalSaveLayout.RoleFieldOffset(RoleField.ThunderResistance, 0), "role thunder resistance offset");
+    Equal(808, PalSaveLayout.RoleFieldOffset(RoleField.WaterResistance, 0), "role water resistance offset");
+    Equal(820, PalSaveLayout.RoleFieldOffset(RoleField.FireResistance, 0), "role fire resistance offset");
+    Equal(832, PalSaveLayout.RoleFieldOffset(RoleField.EarthResistance, 0), "role earth resistance offset");
     Equal(892, PalSaveLayout.MagicOffset(0, 0), "magic offset");
 }
 
@@ -81,6 +86,8 @@ static void TestSyntheticFieldRoundTrip()
         document.Cash = 123_456;
         document.SetRoleField(2, RoleField.Level, 77);
         document.SetRoleField(2, RoleField.Hp, 888);
+        document.SetRoleSignedField(2, RoleField.WindResistance, -15);
+        document.SetRoleSignedField(2, RoleField.EarthResistance, 35);
         document.SetExperience(2, 4_321);
         document.SetParty([0, 2, 4]);
         document.AddMagic(2, 99);
@@ -88,6 +95,8 @@ static void TestSyntheticFieldRoundTrip()
         Equal((uint)123_456, document.Cash, "cash");
         Equal((ushort)77, document.GetRole(2).Level, "level");
         Equal((ushort)888, document.GetRole(2).Hp, "HP");
+        Equal((short)-15, document.GetRoleSignedField(2, RoleField.WindResistance), "signed wind resistance");
+        Equal((short)35, document.GetRoleSignedField(2, RoleField.EarthResistance), "earth resistance");
         Equal((ushort)4_321, document.GetExperience(2), "experience");
         Equal(3, document.PartyCount, "party count");
         Equal((ushort)4, document.GetParty()[2].RoleId, "third party role");

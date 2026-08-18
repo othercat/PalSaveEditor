@@ -5,6 +5,15 @@ namespace PalSaveEditor.WinForms;
 internal sealed class MainForm : Form
 {
     private static readonly string[] EquipmentSlotNames = ["头戴", "披挂", "身穿", "手持", "脚穿", "佩戴"];
+    private static readonly HashSet<RoleField> SignedRoleFields =
+    [
+        RoleField.PoisonResistance,
+        RoleField.WindResistance,
+        RoleField.ThunderResistance,
+        RoleField.WaterResistance,
+        RoleField.FireResistance,
+        RoleField.EarthResistance,
+    ];
 
     private readonly ToolStripButton _openButton = new("打开");
     private readonly ToolStripButton _saveButton = new("保存") { Enabled = false };
@@ -165,8 +174,8 @@ internal sealed class MainForm : Form
 
         var right = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new(8), RowCount = 3, ColumnCount = 1 };
         right.RowStyles.Add(new(SizeType.AutoSize));
-        right.RowStyles.Add(new(SizeType.Percent, 58));
-        right.RowStyles.Add(new(SizeType.Percent, 42));
+        right.RowStyles.Add(new(SizeType.Percent, 64));
+        right.RowStyles.Add(new(SizeType.Percent, 36));
 
         var rolePicker = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 3 };
         rolePicker.ColumnStyles.Add(new(SizeType.AutoSize));
@@ -178,7 +187,10 @@ internal sealed class MainForm : Form
         right.Controls.Add(rolePicker, 0, 0);
 
         var properties = new GroupBox { Text = "角色属性", Dock = DockStyle.Fill };
-        var propertyTable = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new(8), ColumnCount = 4, RowCount = 8, AutoScroll = true };
+        var propertyRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
+        propertyRoot.RowStyles.Add(new(SizeType.Percent, 100));
+        propertyRoot.RowStyles.Add(new(SizeType.AutoSize));
+        var propertyTable = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new(8), ColumnCount = 4, RowCount = 7, AutoScroll = true };
         propertyTable.ColumnStyles.Add(new(SizeType.AutoSize));
         propertyTable.ColumnStyles.Add(new(SizeType.Percent, 50));
         propertyTable.ColumnStyles.Add(new(SizeType.AutoSize));
@@ -190,10 +202,35 @@ internal sealed class MainForm : Form
         AddNumericRow(propertyTable, 4, "防御", AddRoleField(RoleField.Defense), "身法", AddRoleField(RoleField.Dexterity));
         AddNumericRow(propertyTable, 5, "吉运", AddRoleField(RoleField.FleeRate), "抗毒", AddRoleField(RoleField.PoisonResistance));
         AddNumericRow(propertyTable, 6, "合体法术编号", AddRoleField(RoleField.CooperativeMagic), "姓名字库编号", AddRoleField(RoleField.NameWordId));
-        properties.Controls.Add(propertyTable);
+        propertyRoot.Controls.Add(propertyTable, 0, 0);
+
+        var resistanceGroup = new GroupBox { Text = "五系基础抗性（可为负）", AutoSize = true, Dock = DockStyle.Fill, Padding = new(8, 4, 8, 6) };
+        var resistanceFlow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
+        foreach (var (label, field) in new[]
+                 {
+                     ("风", RoleField.WindResistance),
+                     ("雷", RoleField.ThunderResistance),
+                     ("水", RoleField.WaterResistance),
+                     ("火", RoleField.FireResistance),
+                     ("土", RoleField.EarthResistance),
+                 })
+        {
+            resistanceFlow.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new(6, 7, 2, 0) });
+            var resistance = AddRoleField(field);
+            resistance.Width = 78;
+            resistanceFlow.Controls.Add(resistance);
+        }
+        resistanceGroup.Controls.Add(resistanceFlow);
+        propertyRoot.Controls.Add(resistanceGroup, 0, 1);
+        properties.Controls.Add(propertyRoot);
         right.Controls.Add(properties, 0, 1);
 
-        var lower = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 400 };
+        var lower = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            FixedPanel = FixedPanel.Panel1,
+            SplitterDistance = 300,
+        };
         var magicGroup = new GroupBox { Text = "法术", Dock = DockStyle.Fill, Padding = new(8) };
         var magicRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
         magicRoot.RowStyles.Add(new(SizeType.Percent, 100));
@@ -210,6 +247,8 @@ internal sealed class MainForm : Form
         _equipmentGrid.Columns.Add("slot", "部位");
         _equipmentGrid.Columns.Add("id", "编号");
         _equipmentGrid.Columns.Add("name", "物品");
+        _equipmentGrid.Columns[2].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+        _equipmentGrid.Columns[2].MinimumWidth = 140;
         var equipmentRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
         equipmentRoot.RowStyles.Add(new(SizeType.Percent, 100));
         equipmentRoot.RowStyles.Add(new(SizeType.AutoSize));
@@ -336,7 +375,14 @@ internal sealed class MainForm : Form
             {
                 if (!_loadingControls && _document is not null && SelectedRoleId is int roleId)
                 {
-                    _document.SetRoleField(roleId, capturedField, decimal.ToUInt16(control.Value));
+                    if (SignedRoleFields.Contains(capturedField))
+                    {
+                        _document.SetRoleSignedField(roleId, capturedField, decimal.ToInt16(control.Value));
+                    }
+                    else
+                    {
+                        _document.SetRoleField(roleId, capturedField, decimal.ToUInt16(control.Value));
+                    }
                     if (capturedField == RoleField.NameWordId)
                     {
                         RefreshRoleChoices(roleId);
@@ -554,7 +600,9 @@ internal sealed class MainForm : Form
             _experience.Value = role.Experience;
             foreach (var (field, control) in _roleFields)
             {
-                control.Value = _document.GetRoleField(roleId, field);
+                control.Value = SignedRoleFields.Contains(field)
+                    ? _document.GetRoleSignedField(roleId, field)
+                    : _document.GetRoleField(roleId, field);
             }
 
             _magicList.Items.Clear();
@@ -869,7 +917,7 @@ internal sealed class MainForm : Form
 
     private NumericUpDown AddRoleField(RoleField field)
     {
-        var numeric = CreateUShortNumeric();
+        var numeric = SignedRoleFields.Contains(field) ? CreateInt16Numeric() : CreateUShortNumeric();
         _roleFields.Add(field, numeric);
         return numeric;
     }
@@ -888,6 +936,14 @@ internal sealed class MainForm : Form
     {
         Minimum = 0,
         Maximum = ushort.MaxValue,
+        ThousandsSeparator = true,
+        Width = 160,
+    };
+
+    private static NumericUpDown CreateInt16Numeric() => new()
+    {
+        Minimum = short.MinValue,
+        Maximum = short.MaxValue,
         ThousandsSeparator = true,
         Width = 160,
     };

@@ -175,6 +175,18 @@ public sealed class PalSaveDocument
         WriteUInt16(PalSaveLayout.RoleFieldOffset(field, roleId), value);
     }
 
+    public short GetRoleSignedField(int roleId, RoleField field)
+    {
+        ValidateRole(roleId);
+        return unchecked((short)ReadUInt16(PalSaveLayout.RoleFieldOffset(field, roleId)));
+    }
+
+    public void SetRoleSignedField(int roleId, RoleField field, short value)
+    {
+        ValidateRole(roleId);
+        WriteUInt16(PalSaveLayout.RoleFieldOffset(field, roleId), unchecked((ushort)value));
+    }
+
     public ushort GetExperience(int roleId, int category = 0)
     {
         ValidateRole(roleId);

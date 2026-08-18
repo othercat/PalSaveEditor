@@ -93,6 +93,11 @@ public static class PalSaveLayout
         RoleField.Dexterity => 20 * RoleArraySize,
         RoleField.FleeRate => 21 * RoleArraySize,
         RoleField.PoisonResistance => 22 * RoleArraySize,
+        RoleField.WindResistance => 23 * RoleArraySize,
+        RoleField.ThunderResistance => 24 * RoleArraySize,
+        RoleField.WaterResistance => 25 * RoleArraySize,
+        RoleField.FireResistance => 26 * RoleArraySize,
+        RoleField.EarthResistance => 27 * RoleArraySize,
         RoleField.CooperativeMagic => 65 * RoleArraySize,
         _ => throw new ArgumentOutOfRangeException(nameof(field), field, null),
     };
@@ -116,5 +121,10 @@ public enum RoleField
     Dexterity,
     FleeRate,
     PoisonResistance,
+    WindResistance,
+    ThunderResistance,
+    WaterResistance,
+    FireResistance,
+    EarthResistance,
     CooperativeMagic,
 }
