@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>PalSaveChecker.Core.Tests</AssemblyName>
+    <RootNamespace>PalSaveChecker.Core.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/PalSaveChecker.Core/PalSaveChecker.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,5 +1,8 @@
 <Solution>
+  <Project Path="src/PalSaveChecker.Core/PalSaveChecker.Core.csproj" />
+  <Project Path="src/PalSaveChecker.WinForms/PalSaveChecker.WinForms.csproj" />
   <Project Path="src/PalSaveEditor.Core/PalSaveEditor.Core.csproj" />
   <Project Path="src/PalSaveEditor.WinForms/PalSaveEditor.WinForms.csproj" />
+  <Project Path="tests/PalSaveChecker.Core.Tests/PalSaveChecker.Core.Tests.csproj" />
   <Project Path="tests/PalSaveEditor.Core.Tests/PalSaveEditor.Core.Tests.csproj" />
 </Solution>

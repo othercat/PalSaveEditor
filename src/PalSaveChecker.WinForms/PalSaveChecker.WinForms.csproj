@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>仙剑98存档检查工具</AssemblyName>
+    <RootNamespace>PalSaveChecker.WinForms</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PalSaveChecker.Core/PalSaveChecker.Core.csproj" />
+  </ItemGroup>
+</Project>

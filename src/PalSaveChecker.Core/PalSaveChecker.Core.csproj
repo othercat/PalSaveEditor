@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>PalSaveChecker.Core</AssemblyName>
+    <RootNamespace>PalSaveChecker.Core</RootNamespace>
+  </PropertyGroup>
+</Project>
