@@ -7,4 +7,8 @@
   <ItemGroup>
     <ProjectReference Include="../../src/PalSaveChecker.Core/PalSaveChecker.Core.csproj" />
   </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+  </ItemGroup>
 </Project>

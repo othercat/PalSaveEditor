@@ -22,15 +22,15 @@
 - 添加/移除法术，更换六个装备部位。
 - 搜索、添加、修改或移除背包物品；写入后按游戏规则压紧背包槽。
 - 编辑保存次数、场景、坐标、音乐、战斗音乐、金钱和灵葫值。
-- 覆盖保存前自动在原文件旁创建 `.bak-yyyyMMdd-HHmmss` 完整备份。
-- 同目录临时文件落盘后再替换目标；对象表和事件尾部逐字节保留。
+- 工具栏“保留原存档备份”默认勾选；覆盖保存时在原文件旁创建 `.bak-yyyyMMdd-HHmmss`，取消后不保留备份。
+- 同目录临时文件落盘后再替换目标并复核；取消备份时仍使用临时回滚副本，成功后删除。对象表和事件尾部逐字节保留。
 
 ## 使用
 
 1. 先退出游戏。
 2. 打开 `1.RPG`～`5.RPG`（DOS 安装也可能在 `save` 子目录）。
 3. 如果物品/法术只显示编号，点击“游戏资料目录”，选择包含 `WORD.DAT` 和 `SSS.MKF` 的游戏目录。
-4. 修改后点击“保存”。确认同目录已经出现带时间戳的备份，再进游戏读档验证。
+4. 修改后点击“保存”。默认确认同目录已经出现带时间戳的备份；若主动取消“保留原存档备份”，则确认保存成功后再进游戏读档验证。
 
 例如要制作“盖罗娇、血色蛇形灵儿、李逍遥，随从天鬼皇”的测试档：先在左侧把正式队员排为对应三个角色，再添加“天鬼皇（MGO 12）”；选中灵儿，将战斗形象、地图形象和行走帧上界分别设为 `5`、`512`、`3`。这些数值来自当前测试样本，其他内容包仍应按其配套资源复核。
 
@@ -38,22 +38,28 @@
 
 ## 构建与测试
 
-需要 .NET 8 SDK（Windows）：
+开发和构建需要 .NET 8 SDK（Windows）。测试程序同时覆盖 .NET 8 与 .NET Framework 4.7.2：
 
 ```powershell
-dotnet run --project .\tests\PalSaveEditor.Core.Tests\PalSaveEditor.Core.Tests.csproj -c Release
+dotnet run --project .\tests\PalSaveEditor.Core.Tests\PalSaveEditor.Core.Tests.csproj -c Release -f net8.0
 dotnet build .\PalSaveEditor.slnx -c Release
-dotnet run --project .\src\PalSaveEditor.WinForms\PalSaveEditor.WinForms.csproj -c Release
+.\tests\PalSaveEditor.Core.Tests\bin\Release\net472\PalSaveEditor.Core.Tests.exe
 ```
 
-生成无需预装 .NET 的单文件版本：
+面向 Windows 7 SP1、Windows 10、Windows 11，以及 Windows 11 ARM x86 模拟环境的正式发布目标是 .NET Framework 4.7.2 x86。它不需要安装 .NET 8 Desktop Runtime；未安装 .NET Framework 4.7.2 或更高 4.x 版本的系统仍需先安装相应运行环境。发布目录中的 EXE、DLL 和 exe.config 必须一起分发：
 
 ```powershell
 dotnet publish .\src\PalSaveEditor.WinForms\PalSaveEditor.WinForms.csproj `
-  -c Release -r win-x64 --self-contained true `
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+  -c Release -f net472 -p:PlatformTarget=x86 `
   -p:DebugType=None -p:DebugSymbols=false `
-  -o .\artifacts\win-x64
+  -o .\artifacts\win7-net472
+```
+
+如需开发期对照，也可运行 .NET 8 目标；该目标不是当前玩家覆盖包的发布格式：
+
+```powershell
+dotnet run --project .\src\PalSaveEditor.WinForms\PalSaveEditor.WinForms.csproj `
+  -c Release -f net8.0-windows
 ```
 
 测试程序不使用第三方测试框架，离线环境也可执行。安装了本仓库研究时使用的三类真实样本时，它还会自动运行真实格式、编码和资源边界回归；否则该部分明确显示跳过。
@@ -64,6 +70,10 @@ dotnet publish .\src\PalSaveEditor.WinForms\PalSaveEditor.WinForms.csproj `
 - 不在游戏运行中修改进程内存。
 - 不猜测转换 DOS/Win95 的对象区，也不转换不同剧情版本的事件区。
 - 正式队员和随从写入作为一次共享队列事务执行；超出 5 条总容量或 2 名随从上限时拒绝写入，队伍人数变化时完整迁移随从的 10 字节记录。
-- 自动化测试证明的是解析、字段写入、备份和字节保留；最终游戏内效果仍应由玩家用备份可回滚地验收。
+- 自动化测试证明的是解析、字段写入、可选备份、临时回滚和字节保留；最终游戏内效果仍应由玩家自行验收。重要存档建议保留默认备份。
 
 格式证据、样本哈希和字段边界见 [docs/SAVE_FORMAT_EVIDENCE.md](docs/SAVE_FORMAT_EVIDENCE.md)。
+
+## 许可证
+
+本项目以 [GNU General Public License version 2](LICENSE) 发布，SPDX 标识为 `GPL-2.0-only`。

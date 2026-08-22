@@ -7,9 +7,11 @@ var failures = new List<string>();
 Run("Tools parent directory", TestGameDirectoryLocator);
 Run("clean save", TestCleanSave);
 Run("polluted player records repair with backup", TestPollutedPlayerRecordsRepair);
+Run("polluted save repair without retained backup", TestPollutedSaveRepairWithoutBackup);
 Run("dynamic script state boundary", TestDynamicScriptBoundary);
 Run("GBK config and Chinese patch name", TestGbkConfig);
 Run("invalid patch fails closed", TestInvalidPatchFailsClosed);
+Run("running game repair policy", TestRunningGameRepairPolicy);
 Run("optional real runtime isolated repair", TestOptionalRealRuntime);
 
 if (failures.Count > 0)
@@ -112,6 +114,26 @@ static void TestDynamicScriptBoundary()
     Equal((ushort)1, ReadUInt16(after, itemScript), "restored reference script");
 }
 
+static void TestPollutedSaveRepairWithoutBackup()
+{
+    using Fixture fixture = Fixture.Create();
+    string savePath = Path.Combine(fixture.Root, "1.RPG");
+    byte[] bytes = File.ReadAllBytes(savePath);
+    bytes[0x1620] ^= 0x5A;
+    File.WriteAllBytes(savePath, bytes);
+
+    SaveRepairReport repair = new SaveCompatibilityService().Repair(fixture.Root, keepBackup: false);
+    Equal(false, repair.HasFailures, "repair without retained backup");
+    SaveRepairItem item = repair.Results.Single(result => result.FileName == "1.RPG");
+    Equal(true, item.Success, "repair without backup success");
+    Equal<string?>(null, item.BackupPath, "backup path omitted");
+    Equal(0, Directory.EnumerateFiles(fixture.Root, "*.bak-*", SearchOption.TopDirectoryOnly).Count(),
+        "no retained backup files");
+    Equal(0, Directory.EnumerateFiles(fixture.Root, "*.rollback", SearchOption.TopDirectoryOnly).Count(),
+        "no temporary rollback files");
+    Equal(SaveCheckStatus.Clean, repair.After.Saves[0].Status, "post repair without backup status");
+}
+
 static void TestInvalidPatchFailsClosed()
 {
     using Fixture fixture = Fixture.Create();
@@ -137,6 +159,18 @@ static void TestGbkConfig()
     SaveCheckReport report = new SaveCompatibilityService().Check(fixture.Root);
     Equal(SaveCheckStatus.Clean, report.Saves[0].Status, "GBK config status");
     Contains(report.ReferenceDescription, "剧情补丁.zip", "Chinese patch path");
+}
+
+static void TestRunningGameRepairPolicy()
+{
+    RepairRunDecision stopped = RepairRunPolicy.Evaluate(isPalRunning: false);
+    Equal(true, stopped.CanRepair, "stopped game repair allowed");
+    Equal<string?>(null, stopped.Warning, "stopped game warning");
+
+    RepairRunDecision running = RepairRunPolicy.Evaluate(isPalRunning: true);
+    Equal(true, running.CanRepair, "running game repair allowed");
+    Contains(running.Warning, "可以修复磁盘存档", "running game warning allows repair");
+    Contains(running.Warning, "再次保存同一槽位", "running game overwrite warning");
 }
 
 static void TestOptionalRealRuntime()
@@ -197,15 +231,16 @@ static string ReadDefaultPatchName(string configPath)
 {
     string line = File.ReadLines(configPath)
         .First(value => value.TrimStart().StartsWith("DefaultPatch=", StringComparison.OrdinalIgnoreCase));
-    string value = line[(line.IndexOf('=') + 1)..];
+    string value = line.Substring(line.IndexOf('=') + 1);
     int comment = value.IndexOf(';');
-    return (comment >= 0 ? value[..comment] : value).Trim();
+    return (comment >= 0 ? value.Substring(0, comment) : value).Trim();
 }
 
 static string HashFile(string path)
 {
     using FileStream stream = File.OpenRead(path);
-    return Convert.ToHexString(SHA256.HashData(stream));
+    using SHA256 sha256 = SHA256.Create();
+    return BitConverter.ToString(sha256.ComputeHash(stream)).Replace("-", string.Empty);
 }
 
 static string CreateTempDirectory()
@@ -225,7 +260,7 @@ static void Equal<T>(T expected, T actual, string message)
 
 static void Contains(string? actual, string expected, string message)
 {
-    if (actual is null || !actual.Contains(expected, StringComparison.OrdinalIgnoreCase))
+    if (actual is null || actual.IndexOf(expected, StringComparison.OrdinalIgnoreCase) < 0)
     {
         throw new InvalidOperationException($"{message}: '{expected}' not found in '{actual}'");
     }
@@ -312,7 +347,7 @@ file sealed class Fixture : IDisposable
         {
             ZipArchiveEntry entry = zip.CreateEntry("SSS.MKF", CompressionLevel.NoCompression);
             using Stream stream = entry.Open();
-            stream.Write(sss);
+            stream.Write(sss, 0, sss.Length);
         }
 
         byte[] save = new byte[0x1620 + objects.Length + 64];

@@ -10,6 +10,7 @@ var tests = new (string Name, Action Run)[]
     ("inventory compression and duplicate guard", TestInventory),
     ("real sample detection and resource catalogs", TestRealSamples),
     ("safe write creates exact backup", TestSafeWrite),
+    ("safe write without retained backup", TestSafeWriteWithoutBackup),
 };
 
 var failures = new List<string>();
@@ -231,7 +232,7 @@ static void TestRealSamples()
         Equal(14, palDllDream.Catalog.ObjectRecordSize, "PALDLL Dream Win95 objects");
         Equal(171_808, palDllDream.Catalog.EventObjectBytes, "PALDLL Dream events");
         True(!palDllDream.Detection.IsHeuristic, "PALDLL Dream profile resource proof");
-        True(palDllDream.Catalog.SourceDirectory.Contains("pal98.dream220.compat", StringComparison.OrdinalIgnoreCase),
+        True(palDllDream.Catalog.SourceDirectory.IndexOf("pal98.dream220.compat", StringComparison.OrdinalIgnoreCase) >= 0,
             "PALDLL Dream active profile resources");
         Throws<InvalidDataException>(() => palDllDream.SetFormat(SaveFormat.Dream220Dos),
             "reject DOS Dream layout for PALDLL Dream save");
@@ -271,6 +272,35 @@ static void TestSafeWrite()
         SequenceEqual(before, File.ReadAllBytes(result.BackupPath!), "backup bytes");
         Equal(before.Length, File.ReadAllBytes(path).Length, "output length");
         True(!document.IsDirty, "document clean after save");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static void TestSafeWriteWithoutBackup()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var path = Path.Combine(directory, "1.RPG");
+        File.WriteAllBytes(path, new byte[PalSaveLayout.WinEventObjectOffset + 32]);
+        var document = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        document.Cash = 123_456;
+        byte[] expected = document.ToArray();
+
+        SaveWriteResult result = document.Save(createBackup: false);
+
+        True(result.BackupPath is null, "backup path omitted");
+        SequenceEqual(expected, File.ReadAllBytes(path), "saved bytes");
+        True(!document.IsDirty, "document clean after save without backup");
+        Equal(0, Directory.EnumerateFiles(directory, "*.bak-*", SearchOption.TopDirectoryOnly).Count(),
+            "no retained backup files");
+        Equal(0, Directory.EnumerateFiles(directory, "*.rollback", SearchOption.TopDirectoryOnly).Count(),
+            "no temporary rollback files");
+        Equal(0, Directory.EnumerateFiles(directory, "*.tmp", SearchOption.TopDirectoryOnly).Count(),
+            "no temporary write files");
     }
     finally
     {

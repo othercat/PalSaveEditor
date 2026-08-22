@@ -19,6 +19,13 @@ internal sealed class MainForm : Form
     private readonly ToolStripButton _saveButton = new("保存") { Enabled = false };
     private readonly ToolStripButton _saveAsButton = new("另存为") { Enabled = false };
     private readonly ToolStripButton _resourcesButton = new("游戏资料目录") { Enabled = false };
+    private readonly CheckBox _keepBackupCheckBox = new()
+    {
+        Text = "保留原存档备份",
+        Checked = true,
+        AutoSize = true,
+        Margin = new Padding(6, 0, 3, 0),
+    };
     private readonly ToolStripComboBox _formatCombo = new()
     {
         AutoSize = false,
@@ -40,7 +47,7 @@ internal sealed class MainForm : Form
     private readonly DataGridView _equipmentGrid = CreateGrid();
 
     private readonly DataGridView _inventoryGrid = CreateGrid();
-    private readonly TextBox _inventorySearch = new() { PlaceholderText = "筛选名称或编号…", Dock = DockStyle.Fill };
+    private readonly TextBox _inventorySearch = CreateInventorySearchBox();
 
     private readonly NumericUpDown _savedTimes = CreateUShortNumeric();
     private readonly NumericUpDown _scene = CreateUShortNumeric();
@@ -100,7 +107,7 @@ internal sealed class MainForm : Form
         {
             if (!string.IsNullOrWhiteSpace(initialPath) && File.Exists(initialPath))
             {
-                OpenDocument(initialPath);
+                OpenDocument(initialPath!);
             }
         };
     }
@@ -121,7 +128,8 @@ internal sealed class MainForm : Form
         var help = new ToolStripMenuItem("帮助(&H)");
         help.DropDownItems.Add("安全说明", null, (_, _) => MessageBox.Show(
             this,
-            "保存时默认在原文件旁创建带时间戳的完整备份。\r\n" +
+            "“保留原存档备份”默认勾选，可在工具栏取消。\r\n" +
+            "取消后不会留下 .bak 文件，但写入复核完成前仍保留临时回滚副本。\r\n" +
             "编辑器只修改 PAL 固定字段，未知的对象与事件尾部逐字节保留。\r\n" +
             "建议关闭游戏后再编辑存档。",
             "安全说明",
@@ -150,6 +158,8 @@ internal sealed class MainForm : Form
         strip.Items.Add(new ToolStripSeparator());
         strip.Items.Add(new ToolStripLabel("存档格式："));
         strip.Items.Add(_formatCombo);
+        strip.Items.Add(new ToolStripSeparator());
+        strip.Items.Add(new ToolStripControlHost(_keepBackupCheckBox));
         return strip;
     }
 
@@ -342,7 +352,7 @@ internal sealed class MainForm : Form
 
         var note = new Label
         {
-            Text = "提示：请先退出游戏再保存。覆盖保存会在同目录生成 .bak-时间戳 备份；对象表与事件区不会被重建。",
+            Text = "提示：请先退出游戏再保存。“保留原存档备份”默认勾选，可在工具栏取消；对象表与事件区不会被重建。",
             AutoSize = true,
             ForeColor = Color.FromArgb(120, 65, 20),
             Padding = new(4, 14, 4, 8),
@@ -393,9 +403,10 @@ internal sealed class MainForm : Form
                 UpdateDirtyState();
             }
         };
-        foreach (var (field, control) in _roleFields)
+        foreach (KeyValuePair<RoleField, NumericUpDown> pair in _roleFields)
         {
-            var capturedField = field;
+            RoleField capturedField = pair.Key;
+            NumericUpDown control = pair.Value;
             control.ValueChanged += (_, _) =>
             {
                 if (!_loadingControls && _document is not null && SelectedRoleId is int roleId)
@@ -470,9 +481,9 @@ internal sealed class MainForm : Form
 
         RunUiAction(() =>
         {
-            var result = _document.Save(createBackup: true);
+            var result = _document.Save(createBackup: _keepBackupCheckBox.Checked);
             _status.Text = result.BackupPath is null
-                ? $"已保存：{result.TargetPath}"
+                ? $"已保存；未保留备份：{result.TargetPath}"
                 : $"已保存；备份：{result.BackupPath}";
             UpdateDirtyState();
         }, "保存失败");
@@ -500,8 +511,10 @@ internal sealed class MainForm : Form
 
         RunUiAction(() =>
         {
-            var result = _document.Save(dialog.FileName, createBackup: true);
-            _status.Text = $"已另存为：{result.TargetPath}";
+            var result = _document.Save(dialog.FileName, createBackup: _keepBackupCheckBox.Checked);
+            _status.Text = result.BackupPath is null
+                ? $"已另存为；未保留备份：{result.TargetPath}"
+                : $"已另存为；备份：{result.BackupPath}";
             Text = $"仙剑存档编辑器 - [{Path.GetFileName(result.TargetPath)}]";
             UpdateDirtyState();
         }, "另存失败");
@@ -517,9 +530,11 @@ internal sealed class MainForm : Form
         using var dialog = new FolderBrowserDialog
         {
             Description = "选择包含 WORD.DAT 和 SSS.MKF 的仙剑游戏资料目录",
-            UseDescriptionForTitle = true,
             SelectedPath = _document.Catalog?.SourceDirectory ?? Path.GetDirectoryName(_document.Path) ?? string.Empty,
         };
+#if !NETFRAMEWORK
+        dialog.UseDescriptionForTitle = true;
+#endif
         if (dialog.ShowDialog(this) != DialogResult.OK)
         {
             return;
@@ -584,7 +599,7 @@ internal sealed class MainForm : Form
                 _roleCombo.Items.Add(new RoleChoice(roleId, _document.GetRole(roleId).DisplayName));
             }
             var index = preserveRoleId is int id ? id : 0;
-            _roleCombo.SelectedIndex = Math.Clamp(index, 0, _roleCombo.Items.Count - 1);
+            _roleCombo.SelectedIndex = Math.Max(0, Math.Min(_roleCombo.Items.Count - 1, index));
             RefreshParty();
             RefreshFollowers();
         }
@@ -609,7 +624,7 @@ internal sealed class MainForm : Form
         }
         if (_partyList.Items.Count > 0)
         {
-            _partyList.SelectedIndex = Math.Clamp(selected, 0, _partyList.Items.Count - 1);
+            _partyList.SelectedIndex = Math.Max(0, Math.Min(_partyList.Items.Count - 1, selected));
         }
     }
 
@@ -628,7 +643,7 @@ internal sealed class MainForm : Form
         }
         if (_followerList.Items.Count > 0)
         {
-            _followerList.SelectedIndex = Math.Clamp(selected, 0, _followerList.Items.Count - 1);
+            _followerList.SelectedIndex = Math.Max(0, Math.Min(_followerList.Items.Count - 1, selected));
         }
     }
 
@@ -644,8 +659,10 @@ internal sealed class MainForm : Form
         {
             var role = _document.GetRole(roleId);
             _experience.Value = role.Experience;
-            foreach (var (field, control) in _roleFields)
+            foreach (KeyValuePair<RoleField, NumericUpDown> pair in _roleFields)
             {
+                RoleField field = pair.Key;
+                NumericUpDown control = pair.Value;
                 control.Value = SignedRoleFields.Contains(field)
                     ? _document.GetRoleSignedField(roleId, field)
                     : _document.GetRoleField(roleId, field);
@@ -682,8 +699,8 @@ internal sealed class MainForm : Form
         foreach (var entry in _document.GetInventory())
         {
             if (filter.Length != 0 &&
-                !entry.DisplayName.Contains(filter, StringComparison.CurrentCultureIgnoreCase) &&
-                !entry.ItemId.ToString().Contains(filter, StringComparison.Ordinal))
+                entry.DisplayName.IndexOf(filter, StringComparison.CurrentCultureIgnoreCase) < 0 &&
+                entry.ItemId.ToString().IndexOf(filter, StringComparison.Ordinal) < 0)
             {
                 continue;
             }
@@ -1153,6 +1170,15 @@ internal sealed class MainForm : Form
         var button = new Button { Text = text, AutoSize = true, Margin = new(3, 5, 3, 3) };
         button.Click += onClick;
         return button;
+    }
+
+    private static TextBox CreateInventorySearchBox()
+    {
+        var textBox = new TextBox { Dock = DockStyle.Fill };
+#if !NETFRAMEWORK
+        textBox.PlaceholderText = "筛选名称或编号…";
+#endif
+        return textBox;
     }
 
     private static DataGridView CreateGrid() => new()

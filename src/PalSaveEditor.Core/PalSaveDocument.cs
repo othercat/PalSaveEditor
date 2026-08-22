@@ -39,7 +39,8 @@ public sealed class PalSaveDocument
     public uint Cash { get => ReadUInt32(PalSaveLayout.CashOffset); set => WriteUInt32(PalSaveLayout.CashOffset, value); }
     public int PartyCount
     {
-        get => Math.Clamp(ReadUInt16(PalSaveLayout.PartyMaxIndexOffset) + 1, 1, PalSaveLayout.PartyCapacity);
+        get => Math.Max(1, Math.Min(PalSaveLayout.PartyCapacity,
+            ReadUInt16(PalSaveLayout.PartyMaxIndexOffset) + 1));
         private set
         {
             if (value is < 1 or > PalSaveLayout.PartyCapacity)
@@ -56,13 +57,16 @@ public sealed class PalSaveDocument
         SaveFormat requestedFormat = SaveFormat.Auto,
         string? gameDirectory = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new ArgumentException("存档路径不能为空。", nameof(path));
+        }
         var fullPath = System.IO.Path.GetFullPath(path);
         var bytes = File.ReadAllBytes(fullPath);
         PalResourceCatalog? catalog = null;
         if (!string.IsNullOrWhiteSpace(gameDirectory))
         {
-            catalog = PalResourceCatalog.Load(gameDirectory);
+            catalog = PalResourceCatalog.Load(gameDirectory!);
         }
         else
         {
@@ -117,7 +121,10 @@ public sealed class PalSaveDocument
 
     public void SetParty(IReadOnlyList<ushort> roleIds)
     {
-        ArgumentNullException.ThrowIfNull(roleIds);
+        if (roleIds is null)
+        {
+            throw new ArgumentNullException(nameof(roleIds));
+        }
         if (roleIds.Count is < 1 or > PalSaveLayout.PartyCapacity)
         {
             throw new ArgumentOutOfRangeException(nameof(roleIds), "队伍人数必须为 1 到 5。 ");
@@ -186,7 +193,10 @@ public sealed class PalSaveDocument
 
     public void SetFollowers(IReadOnlyList<ushort> spriteIds)
     {
-        ArgumentNullException.ThrowIfNull(spriteIds);
+        if (spriteIds is null)
+        {
+            throw new ArgumentNullException(nameof(spriteIds));
+        }
         if (spriteIds.Count > PalSaveLayout.FollowerCapacity)
         {
             throw new ArgumentOutOfRangeException(nameof(spriteIds), $"随从人数最多为 {PalSaveLayout.FollowerCapacity}。");
@@ -475,7 +485,10 @@ public sealed class PalSaveDocument
         }
 
         var occupied = entries.Select(entry => entry.Slot).ToHashSet();
-        var freeSlot = Enumerable.Range(0, PalSaveLayout.InventoryCapacity).FirstOrDefault(slot => !occupied.Contains(slot), -1);
+        var freeSlot = Enumerable.Range(0, PalSaveLayout.InventoryCapacity)
+            .Where(slot => !occupied.Contains(slot))
+            .DefaultIfEmpty(-1)
+            .First();
         if (freeSlot < 0)
         {
             throw new InvalidOperationException("背包的 256 个槽已满。");
@@ -497,17 +510,17 @@ public sealed class PalSaveDocument
     public SaveWriteResult Save(string? targetPath = null, bool createBackup = true)
     {
         var destination = System.IO.Path.GetFullPath(targetPath ?? Path);
-        string? backupPath = null;
-
-        if (createBackup && File.Exists(destination))
-        {
-            backupPath = BuildBackupPath(destination);
-            File.Copy(destination, backupPath, overwrite: false);
-        }
-
         var directory = System.IO.Path.GetDirectoryName(destination)
             ?? throw new InvalidOperationException("无法确定目标目录。");
         Directory.CreateDirectory(directory);
+        bool destinationExisted = File.Exists(destination);
+        string? rollbackPath = destinationExisted
+            ? createBackup
+                ? BuildBackupPath(destination)
+                : System.IO.Path.Combine(
+                    directory,
+                    $".{System.IO.Path.GetFileName(destination)}.{Guid.NewGuid():N}.rollback")
+            : null;
         var temporaryPath = System.IO.Path.Combine(
             directory,
             $".{System.IO.Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
@@ -516,11 +529,47 @@ public sealed class PalSaveDocument
         {
             using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                stream.Write(_bytes);
+                stream.Write(_bytes, 0, _bytes.Length);
                 stream.Flush(flushToDisk: true);
             }
 
-            File.Move(temporaryPath, destination, overwrite: true);
+            if (destinationExisted)
+            {
+                File.Replace(temporaryPath, destination, rollbackPath!, ignoreMetadataErrors: true);
+            }
+            else
+            {
+                File.Move(temporaryPath, destination);
+            }
+
+            byte[] persisted = File.ReadAllBytes(destination);
+            if (!persisted.AsSpan().SequenceEqual(_bytes))
+            {
+                throw new IOException("保存后的文件与待写入数据不一致。 ");
+            }
+
+            if (destinationExisted && !createBackup)
+            {
+                File.Delete(rollbackPath!);
+                rollbackPath = null;
+            }
+        }
+        catch
+        {
+            if (rollbackPath is not null && File.Exists(rollbackPath))
+            {
+                File.Copy(rollbackPath, destination, overwrite: true);
+                if (!createBackup)
+                {
+                    File.Delete(rollbackPath);
+                    rollbackPath = null;
+                }
+            }
+            else if (!destinationExisted && File.Exists(destination))
+            {
+                File.Delete(destination);
+            }
+            throw;
         }
         finally
         {
@@ -533,7 +582,7 @@ public sealed class PalSaveDocument
         Path = destination;
         Array.Copy(_bytes, _originalBytes, _bytes.Length);
 
-        return new(destination, backupPath, _bytes.Length);
+        return new(destination, createBackup ? rollbackPath : null, _bytes.Length);
     }
 
     private static void ValidateFormat(int length, SaveFormat format)

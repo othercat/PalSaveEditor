@@ -19,7 +19,7 @@ internal sealed class NumericPromptDialog : Form
         root.ColumnStyles.Add(new(SizeType.Percent, 100));
         root.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
         _value.Maximum = maximum;
-        _value.Value = Math.Clamp(initialValue, 0, maximum);
+        _value.Value = Math.Max(0, Math.Min(maximum, initialValue));
         _value.Dock = DockStyle.Fill;
         _value.ThousandsSeparator = true;
         root.Controls.Add(_value, 1, 0);

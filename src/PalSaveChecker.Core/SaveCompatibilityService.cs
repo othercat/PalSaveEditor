@@ -80,7 +80,7 @@ public sealed class SaveCompatibilityService
         return CheckWithReference(fullRoot, reference!, description!);
     }
 
-    public SaveRepairReport Repair(string gameRoot)
+    public SaveRepairReport Repair(string gameRoot, bool keepBackup = true)
     {
         string fullRoot = Path.GetFullPath(gameRoot);
         SaveCheckReport before = Check(fullRoot);
@@ -122,16 +122,40 @@ public sealed class SaveCompatibilityService
                     continue;
                 }
 
-                string backupPath = ReplaceWithBackup(savePath, repaired);
-                Analysis diskVerification = Analyze(ReadAllBytesShared(savePath), reference!);
-                if (!diskVerification.IsClean)
+                string rollbackPath = ReplaceWithRollback(savePath, repaired, keepBackup);
+                try
                 {
-                    File.Copy(backupPath, savePath, overwrite: true);
-                    results.Add(new SaveRepairItem(item.FileName, false, "落盘复核失败，已从备份恢复原存档。", backupPath));
-                    continue;
-                }
+                    Analysis diskVerification = Analyze(ReadAllBytesShared(savePath), reference!);
+                    if (!diskVerification.IsClean)
+                    {
+                        RestoreRollback(rollbackPath, savePath, keepBackup);
+                        results.Add(new SaveRepairItem(
+                            item.FileName,
+                            false,
+                            "落盘复核失败，已从回滚副本恢复原存档。",
+                            keepBackup ? rollbackPath : null));
+                        continue;
+                    }
 
-                results.Add(new SaveRepairItem(item.FileName, true, "修复完成并已创建备份。", backupPath));
+                    if (!keepBackup)
+                    {
+                        File.Delete(rollbackPath);
+                    }
+
+                    results.Add(new SaveRepairItem(
+                        item.FileName,
+                        true,
+                        keepBackup ? "修复完成并已创建备份。" : "修复完成；未保留备份。",
+                        keepBackup ? rollbackPath : null));
+                }
+                catch
+                {
+                    if (File.Exists(rollbackPath))
+                    {
+                        RestoreRollback(rollbackPath, savePath, keepBackup);
+                    }
+                    throw;
+                }
             }
             catch (Exception ex)
             {
@@ -380,16 +404,17 @@ public sealed class SaveCompatibilityService
     private static string ReadDefaultPatch(string configPath)
     {
         string section = string.Empty;
-        foreach (string rawLine in ReadConfigText(configPath).Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        foreach (string rawLine in ReadConfigText(configPath).Split(
+            new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
         {
             string line = rawLine.Trim();
-            if (line.Length == 0 || line.StartsWith(';') || line.StartsWith('#'))
+            if (line.Length == 0 || line[0] == ';' || line[0] == '#')
             {
                 continue;
             }
-            if (line.StartsWith('[') && line.EndsWith(']'))
+            if (line[0] == '[' && line[line.Length - 1] == ']')
             {
-                section = line[1..^1].Trim();
+                section = line.Substring(1, line.Length - 2).Trim();
                 continue;
             }
             if (!section.Equals("Patch", StringComparison.OrdinalIgnoreCase))
@@ -397,15 +422,15 @@ public sealed class SaveCompatibilityService
                 continue;
             }
             int equals = line.IndexOf('=');
-            if (equals <= 0 || !line[..equals].Trim().Equals("DefaultPatch", StringComparison.OrdinalIgnoreCase))
+            if (equals <= 0 || !line.Substring(0, equals).Trim().Equals("DefaultPatch", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
-            string value = line[(equals + 1)..].Trim();
+            string value = line.Substring(equals + 1).Trim();
             int comment = value.IndexOf(';');
             if (comment >= 0)
             {
-                value = value[..comment].Trim();
+                value = value.Substring(0, comment).Trim();
             }
             return value.Trim().Trim('"');
         }
@@ -428,7 +453,7 @@ public sealed class SaveCompatibilityService
     }
 
     private static bool IsSafePatchName(string value) =>
-        !value.Contains("..", StringComparison.Ordinal) &&
+        value.IndexOf("..", StringComparison.Ordinal) < 0 &&
         value.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) < 0 &&
         !Path.IsPathRooted(value);
 
@@ -450,7 +475,7 @@ public sealed class SaveCompatibilityService
         }
 
         string patchStem = defaultPatch.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
-            ? defaultPatch[..^4]
+            ? defaultPatch.Substring(0, defaultPatch.Length - 4)
             : defaultPatch;
         string? zipPath = Directory.EnumerateFiles(patchesRoot, "*.zip", SearchOption.TopDirectoryOnly)
             .FirstOrDefault(path => Path.GetFileNameWithoutExtension(path).Equals(patchStem, StringComparison.OrdinalIgnoreCase));
@@ -490,14 +515,22 @@ public sealed class SaveCompatibilityService
         return false;
     }
 
-    private static string ReplaceWithBackup(string path, byte[] bytes)
+    private static string ReplaceWithRollback(string path, byte[] bytes, bool keepBackup)
     {
         string directory = Path.GetDirectoryName(path) ?? throw new IOException("存档目录无效。 ");
-        string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        string backup = Path.Combine(directory, $"{Path.GetFileName(path)}.bak-{timestamp}");
-        for (int suffix = 1; File.Exists(backup); suffix++)
+        string rollback;
+        if (keepBackup)
         {
-            backup = Path.Combine(directory, $"{Path.GetFileName(path)}.bak-{timestamp}-{suffix}");
+            string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            rollback = Path.Combine(directory, $"{Path.GetFileName(path)}.bak-{timestamp}");
+            for (int suffix = 1; File.Exists(rollback); suffix++)
+            {
+                rollback = Path.Combine(directory, $"{Path.GetFileName(path)}.bak-{timestamp}-{suffix}");
+            }
+        }
+        else
+        {
+            rollback = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.rollback");
         }
 
         string temporary = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
@@ -508,8 +541,8 @@ public sealed class SaveCompatibilityService
             {
                 stream.Flush(flushToDisk: true);
             }
-            File.Replace(temporary, path, backup, ignoreMetadataErrors: true);
-            return backup;
+            File.Replace(temporary, path, rollback, ignoreMetadataErrors: true);
+            return rollback;
         }
         finally
         {
@@ -517,6 +550,15 @@ public sealed class SaveCompatibilityService
             {
                 File.Delete(temporary);
             }
+        }
+    }
+
+    private static void RestoreRollback(string rollbackPath, string savePath, bool keepBackup)
+    {
+        File.Copy(rollbackPath, savePath, overwrite: true);
+        if (!keepBackup)
+        {
+            File.Delete(rollbackPath);
         }
     }
 
@@ -529,8 +571,23 @@ public sealed class SaveCompatibilityService
             throw new IOException("文件过大。 ");
         }
         var bytes = new byte[(int)stream.Length];
-        stream.ReadExactly(bytes);
+        ReadExactly(stream, bytes);
         return bytes;
+    }
+
+    private static void ReadExactly(Stream stream, byte[] buffer)
+    {
+        int readTotal = 0;
+        while (readTotal < buffer.Length)
+        {
+            int read = stream.Read(buffer, readTotal, buffer.Length - readTotal);
+            if (read == 0)
+            {
+                throw new EndOfStreamException();
+            }
+
+            readTotal += read;
+        }
     }
 
     private static ushort ReadUInt16(byte[] bytes, int offset) =>

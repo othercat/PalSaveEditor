@@ -8,6 +8,13 @@ internal sealed class MainForm : Form
 {
     private readonly Button _checkButton = new() { Text = "检查", AutoSize = true };
     private readonly Button _repairButton = new() { Text = "修复", AutoSize = true };
+    private readonly CheckBox _keepBackupCheckBox = new()
+    {
+        Text = "保留原存档备份",
+        Checked = true,
+        AutoSize = true,
+        Margin = new Padding(12, 6, 3, 3),
+    };
     private readonly RichTextBox _output = new()
     {
         Dock = DockStyle.Fill,
@@ -38,6 +45,7 @@ internal sealed class MainForm : Form
         };
         buttonPanel.Controls.Add(_checkButton);
         buttonPanel.Controls.Add(_repairButton);
+        buttonPanel.Controls.Add(_keepBackupCheckBox);
         Controls.Add(_output);
         Controls.Add(buttonPanel);
 
@@ -62,18 +70,15 @@ internal sealed class MainForm : Form
         }
         finally
         {
-            _checkButton.Enabled = true;
+            SetBusy(false);
         }
     }
 
     private void RepairSaves()
     {
-        if (IsPalRunning())
-        {
-            MessageBox.Show(this, "检测到 PAL 游戏进程仍在运行。请先退出游戏，再执行修复。",
-                "无法修复", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
+        bool palRunning = IsPalRunning();
+        bool keepBackup = _keepBackupCheckBox.Checked;
+        RepairRunDecision runDecision = RepairRunPolicy.Evaluate(palRunning);
 
         SaveCheckReport current = _service.Check(_gameRoot);
         if (!current.CanRepair)
@@ -85,8 +90,18 @@ internal sealed class MainForm : Form
             return;
         }
 
+        string confirmation = "将按当前 DefaultPatch 的 SSS.MKF 修复受污染的对象记录。";
+        confirmation += keepBackup
+            ? "每个原存档都会保留带时间戳的备份。"
+            : "不会保留备份；落盘复核完成前仍会使用临时回滚副本。";
+        if (!string.IsNullOrWhiteSpace(runDecision.Warning))
+        {
+            confirmation += $"\n\n{runDecision.Warning}";
+        }
+        confirmation += "\n\n是否继续？";
+
         if (MessageBox.Show(this,
-            "将按当前 DefaultPatch 的 SSS.MKF 修复受污染的对象记录。每个原存档都会先创建带时间戳的备份。是否继续？",
+            confirmation,
             "确认修复", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
             MessageBoxDefaultButton.Button2) != DialogResult.Yes)
         {
@@ -96,7 +111,7 @@ internal sealed class MainForm : Form
         SetBusy(true);
         try
         {
-            SaveRepairReport result = _service.Repair(_gameRoot);
+            SaveRepairReport result = _service.Repair(_gameRoot, keepBackup);
             var text = new StringBuilder(FormatReport(result.After));
             text.AppendLine().AppendLine("修复结果：");
             foreach (SaveRepairItem item in result.Results)
@@ -118,7 +133,14 @@ internal sealed class MainForm : Form
             }
             else
             {
-                MessageBox.Show(this, "修复及落盘复核完成。原存档备份保留在游戏目录。",
+                string message = keepBackup
+                    ? "修复及落盘复核完成。原存档备份保留在游戏目录。"
+                    : "修复及落盘复核完成。按所选设置未保留备份。";
+                if (palRunning)
+                {
+                    message += "\n\n游戏仍在运行：请直接读入修复后的存档；若之后保存同一槽位，游戏可能重新写入内存中的旧数据。";
+                }
+                MessageBox.Show(this, message,
                     "修复完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
@@ -129,7 +151,7 @@ internal sealed class MainForm : Form
         }
         finally
         {
-            _checkButton.Enabled = true;
+            SetBusy(false);
         }
     }
 
@@ -137,7 +159,11 @@ internal sealed class MainForm : Form
     {
         UseWaitCursor = busy;
         _checkButton.Enabled = !busy;
-        _repairButton.Enabled = !busy;
+        _keepBackupCheckBox.Enabled = !busy;
+        if (busy)
+        {
+            _repairButton.Enabled = false;
+        }
     }
 
     private static bool IsPalRunning()

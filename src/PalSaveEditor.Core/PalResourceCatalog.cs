@@ -53,7 +53,10 @@ public sealed class PalResourceCatalog
 
     public static PalResourceCatalog Load(string gameDirectory)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(gameDirectory);
+        if (string.IsNullOrWhiteSpace(gameDirectory))
+        {
+            throw new ArgumentException("游戏资料目录不能为空。", nameof(gameDirectory));
+        }
         var requestedDirectory = Path.GetFullPath(gameDirectory);
         var fullDirectory = TryResolveActiveProfileResources(requestedDirectory) ?? requestedDirectory;
         var wordPath = Path.Combine(fullDirectory, "WORD.DAT");
@@ -64,7 +67,9 @@ public sealed class PalResourceCatalog
 
         var wordBytes = File.ReadAllBytes(wordPath);
         var wordPayloadLength = wordBytes.Length;
-        if (wordPayloadLength % 10 == 2 && wordBytes[^2] == 0x0D && wordBytes[^1] == 0x0A)
+        if (wordPayloadLength % 10 == 2 &&
+            wordBytes[wordBytes.Length - 2] == 0x0D &&
+            wordBytes[wordBytes.Length - 1] == 0x0A)
         {
             wordPayloadLength -= 2;
         }
@@ -108,10 +113,10 @@ public sealed class PalResourceCatalog
         var words = new string[wordPayloadLength / 10];
         for (var i = 0; i < words.Length; i++)
         {
-            var record = wordBytes.AsSpan(i * 10, 10);
-            var zero = record.IndexOf((byte)0);
-            var length = zero >= 0 ? zero : record.Length;
-            words[i] = wordEncoding.GetString(record[..length]).Trim();
+            int recordOffset = i * 10;
+            int length = Array.IndexOf(wordBytes, (byte)0, recordOffset, 10);
+            length = length >= 0 ? length - recordOffset : 10;
+            words[i] = wordEncoding.GetString(wordBytes, recordOffset, length).Trim();
         }
 
         return new(fullDirectory, words, wordBytes.Length, flags, recordSize, eventObjectBytes);
@@ -148,8 +153,8 @@ public sealed class PalResourceCatalog
                 continue;
             }
 
-            if (normalized.Length == 0 || name.Contains(normalized, StringComparison.CurrentCultureIgnoreCase) ||
-                id.ToString().Contains(normalized, StringComparison.Ordinal))
+            if (normalized.Length == 0 || name.IndexOf(normalized, StringComparison.CurrentCultureIgnoreCase) >= 0 ||
+                id.ToString().IndexOf(normalized, StringComparison.Ordinal) >= 0)
             {
                 result.Add(((ushort)id, name));
             }
@@ -247,7 +252,7 @@ public sealed class PalResourceCatalog
     private static byte[] ReadMkfChunk(string path, int chunkIndex)
     {
         using var stream = File.OpenRead(path);
-        Span<byte> four = stackalloc byte[4];
+        var four = new byte[4];
         ReadExactly(stream, four);
         var firstOffset = BinaryPrimitives.ReadUInt32LittleEndian(four);
         if (firstOffset < 8 || firstOffset % 4 != 0 || firstOffset > stream.Length)
@@ -277,12 +282,12 @@ public sealed class PalResourceCatalog
         return data;
     }
 
-    private static void ReadExactly(Stream stream, Span<byte> buffer)
+    private static void ReadExactly(Stream stream, byte[] buffer)
     {
-        var readTotal = 0;
+        int readTotal = 0;
         while (readTotal < buffer.Length)
         {
-            var read = stream.Read(buffer[readTotal..]);
+            int read = stream.Read(buffer, readTotal, buffer.Length - readTotal);
             if (read == 0)
             {
                 throw new EndOfStreamException();
