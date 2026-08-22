@@ -90,7 +90,7 @@ internal sealed class MainForm : Form
             return;
         }
 
-        string confirmation = "将按当前 DefaultPatch 的 SSS.MKF 修复受污染的对象记录。";
+        string confirmation = "将按检查结果所列 active profile/补丁的 SSS.MKF 修复受污染的对象记录。";
         confirmation += keepBackup
             ? "每个原存档都会保留带时间戳的备份。"
             : "不会保留备份；落盘复核完成前仍会使用临时回滚副本。";
@@ -203,6 +203,7 @@ internal sealed class MainForm : Form
                 SaveCheckStatus.Missing => "未找到",
                 SaveCheckStatus.Clean => "正常",
                 SaveCheckStatus.Polluted => "疑似污染",
+                SaveCheckStatus.Incompatible => "版本/流程不匹配",
                 SaveCheckStatus.Unreadable => "无法检查",
                 _ => item.Status.ToString(),
             };
@@ -219,7 +220,7 @@ internal sealed class MainForm : Form
         }
 
         text.AppendLine();
-        text.AppendLine("说明：检查只比较当前补丁中应稳定的对象定义，并验证会随剧情推进的脚本索引是否仍在有效范围内。未报告异常不等于覆盖所有存档损坏类型。 ");
+        text.AppendLine("说明：先核对 active profile/补丁对应的存档总长度和事件记录数，再比较应稳定的对象定义，并验证会随剧情推进的脚本索引是否仍在有效范围内。工具不会用初始 SSS 事件表猜测或重建已经推进的剧情状态。 ");
         return text.ToString();
     }
 }

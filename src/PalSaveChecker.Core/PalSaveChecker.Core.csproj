@@ -11,4 +11,7 @@
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.IO.Compression.FileSystem" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PalSaveEditor.Core/PalSaveEditor.Core.csproj" />
+  </ItemGroup>
 </Project>

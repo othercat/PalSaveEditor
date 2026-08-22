@@ -25,24 +25,59 @@ public static class SaveFormatDetector
                 $"文件仅 {fileLength:N0} 字节，小于可编辑 PAL 存档的 DOS 固定区域 {PalSaveLayout.DosEventObjectOffset:N0} 字节。");
         }
 
-        if (wordDatLength == 5_892 && objectRecordSize == PalSaveLayout.DosObjectRecordSize &&
-            (eventObjectBytes == 0 || fileLength == PalSaveLayout.DosEventObjectOffset + eventObjectBytes))
+        if (objectRecordSize is PalSaveLayout.DosObjectRecordSize or PalSaveLayout.WinObjectRecordSize &&
+            eventObjectBytes > 0)
         {
-            return new(
-                SaveFormat.Dream220Dos,
-                "配套 WORD.DAT、DOS 对象表和事件区均符合梦幻 2.20 资源。",
-                false,
-                [SaveFormat.Dream220Dos, SaveFormat.PalDos]);
-        }
+            if (eventObjectBytes % 32 != 0)
+            {
+                throw new InvalidDataException(
+                    $"配套 SSS.MKF 的事件区 {eventObjectBytes:N0} 字节不是完整的 32 字节记录。");
+            }
 
-        if (wordDatLength == 5_650 && objectRecordSize == PalSaveLayout.WinObjectRecordSize &&
-            eventObjectBytes == 171_808 && fileLength == PalSaveLayout.WinEventObjectOffset + eventObjectBytes)
-        {
+            int fixedPrefix = objectRecordSize == PalSaveLayout.DosObjectRecordSize
+                ? PalSaveLayout.DosEventObjectOffset
+                : PalSaveLayout.WinEventObjectOffset;
+            int expectedLength = checked(fixedPrefix + eventObjectBytes);
+            if (fileLength != expectedLength)
+            {
+                int actualEventBytes = fileLength - fixedPrefix;
+                int expectedRecords = eventObjectBytes / 32;
+                string actualRecords = actualEventBytes >= 0 && actualEventBytes % 32 == 0
+                    ? (actualEventBytes / 32).ToString("N0")
+                    : "非整记录";
+                throw new InvalidDataException(
+                    $"存档长度 {fileLength:N0} 与当前资料不匹配：当前资料要求 {expectedLength:N0} 字节" +
+                    $"（固定区 {fixedPrefix:N0} + {expectedRecords:N0} 条事件记录），当前仅对应 {actualRecords} 条。" +
+                    "这通常是其他剧情版本的存档；编辑器不会猜测或重建事件流程。");
+            }
+
+            if (wordDatLength == 5_892 && objectRecordSize == PalSaveLayout.DosObjectRecordSize)
+            {
+                return new(
+                    SaveFormat.Dream220Dos,
+                    "配套 WORD.DAT、DOS 对象表和事件区均符合梦幻 2.20 资源。",
+                    false,
+                    [SaveFormat.Dream220Dos, SaveFormat.PalDos]);
+            }
+
+            if (wordDatLength == 5_650 && objectRecordSize == PalSaveLayout.WinObjectRecordSize &&
+                eventObjectBytes == 171_808)
+            {
+                return new(
+                    SaveFormat.Dream220Win95,
+                    "存档采用 Win95 固定区，配套对象表和事件区符合 PALDLL 梦幻 2.20 移植版。",
+                    false,
+                    [SaveFormat.Dream220Win95, SaveFormat.PalWin95]);
+            }
+
+            SaveFormat resourceFormat = objectRecordSize == PalSaveLayout.DosObjectRecordSize
+                ? SaveFormat.PalDos
+                : SaveFormat.PalWin95;
             return new(
-                SaveFormat.Dream220Win95,
-                "存档采用 Win95 固定区，配套对象表和事件区符合 PALDLL 梦幻 2.20 移植版。",
+                resourceFormat,
+                $"文件长度、{objectRecordSize} 字节对象表和 {eventObjectBytes / 32:N0} 条事件记录均与配套资源一致。",
                 false,
-                [SaveFormat.Dream220Win95, SaveFormat.PalWin95]);
+                [resourceFormat]);
         }
 
         return fileLength switch

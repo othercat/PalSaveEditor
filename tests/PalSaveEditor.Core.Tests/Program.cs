@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
 using PalSaveEditor.Core;
 
 var tests = new (string Name, Action Run)[]
@@ -8,6 +10,8 @@ var tests = new (string Name, Action Run)[]
     ("synthetic field round trip", TestSyntheticFieldRoundTrip),
     ("party and follower shared queue round trip", TestPartyAndFollowers),
     ("inventory compression and duplicate guard", TestInventory),
+    ("Hunqian 1.67 active profile layout guard", TestHunqianActiveProfileLayout),
+    ("optional Hunqian 1.67 runtime read-only load", TestOptionalHunqianRuntime),
     ("real sample detection and resource catalogs", TestRealSamples),
     ("safe write creates exact backup", TestSafeWrite),
     ("safe write without retained backup", TestSafeWriteWithoutBackup),
@@ -197,6 +201,110 @@ static void TestInventory()
     }
 }
 
+static void TestHunqianActiveProfileLayout()
+{
+    string directory = CreateTestDirectory();
+    try
+    {
+        const string profileId = "pal98.hunqian167.easy";
+        const string profileVersion = "1.0.0";
+        const int eventBytes = 170_624;
+        string staged = Path.Combine(directory, "palmod", "Profiles", profileId, profileVersion);
+        string resources = Directory.CreateDirectory(Path.Combine(staged, "resources")).FullName;
+        string manifest = Directory.CreateDirectory(Path.Combine(staged, "manifest")).FullName;
+        byte[] events = new byte[eventBytes];
+        byte[] objects = new byte[575 * PalSaveLayout.WinObjectRecordSize];
+        byte[] sss = BuildMkf(events, [], objects);
+        string sssPath = Path.Combine(resources, "SSS.MKF");
+        string wordPath = Path.Combine(resources, "WORD.DAT");
+        File.WriteAllBytes(sssPath, sss);
+        File.WriteAllBytes(wordPath, new byte[5_750]);
+
+        string descriptor =
+            "{" +
+            "\"schema\":\"PAL98.GameProfile.v1\"," +
+            $"\"profile_id\":\"{profileId}\"," +
+            $"\"profile_version\":\"{profileVersion}\"," +
+            "\"display_name\":\"魂牵梦萦 1.67 简单 兼容配置档\"," +
+            "\"resource_set\":[" +
+            ProfileResourceJson("SSS.MKF", "resources/SSS.MKF", sssPath) + "," +
+            ProfileResourceJson("WORD.DAT", "resources/WORD.DAT", wordPath) +
+            "]}";
+        string descriptorPath = Path.Combine(manifest, "game-profile.json");
+        File.WriteAllText(descriptorPath, descriptor, new UTF8Encoding(false));
+        string profiles = Directory.CreateDirectory(Path.Combine(directory, "palmod", "Profiles")).FullName;
+        string pointer =
+            "{" +
+            "\"schema\":\"PAL98.EffectiveGameProfilePointer.v1\"," +
+            $"\"profile_id\":\"{profileId}\"," +
+            $"\"profile_version\":\"{profileVersion}\"," +
+            $"\"descriptor_sha256\":\"{HashFile(descriptorPath)}\"," +
+            $"\"staging_relative_path\":\"{profileId}/{profileVersion}\"" +
+            "}";
+        File.WriteAllText(Path.Combine(profiles, "current.json"), pointer, new UTF8Encoding(false));
+
+        string compatiblePath = Path.Combine(directory, "1.RPG");
+        var compatible = new byte[PalSaveLayout.WinEventObjectOffset + eventBytes];
+        FillTail(compatible, PalSaveLayout.WinEventObjectOffset);
+        File.WriteAllBytes(compatiblePath, compatible);
+        string incompatiblePath = Path.Combine(directory, "3.RPG");
+        File.WriteAllBytes(incompatiblePath, compatible.AsSpan(0, SaveFormatDetector.KnownPal98Length).ToArray());
+
+        PalSaveDocument document = PalSaveDocument.Load(compatiblePath, gameDirectory: directory);
+        Equal(SaveFormat.PalWin95, document.Format, "Hunqian PALDLL Win95 format");
+        True(!document.Detection.IsHeuristic, "active profile resource proof");
+        NotNull(document.Catalog, "Hunqian catalog");
+        Equal(profileId, document.Catalog!.ActiveProfileId!, "active profile id");
+        Equal(profileVersion, document.Catalog.ActiveProfileVersion!, "active profile version");
+        Equal(eventBytes, document.Catalog.EventObjectBytes, "Hunqian event bytes");
+        Equal(PalSaveLayout.WinObjectRecordSize, document.Catalog.ObjectRecordSize, "Hunqian object width");
+        True(document.Detection.Reason.IndexOf("5,332", StringComparison.Ordinal) >= 0,
+            "Hunqian event count evidence");
+
+        byte[] eventTail = document.ToArray().AsSpan(PalSaveLayout.WinEventObjectOffset).ToArray();
+        document.Cash = 167;
+        document.Save(createBackup: false);
+        PalSaveDocument roundTrip = PalSaveDocument.Load(compatiblePath, gameDirectory: directory);
+        Equal((uint)167, roundTrip.Cash, "Hunqian field round trip");
+        SequenceEqual(eventTail, roundTrip.ToArray().AsSpan(PalSaveLayout.WinEventObjectOffset),
+            "Hunqian opaque event state preserved");
+        Equal(PalSaveLayout.WinEventObjectOffset + eventBytes, roundTrip.Length, "Hunqian length preserved");
+
+        Throws<InvalidDataException>(
+            () => PalSaveDocument.Load(incompatiblePath, gameDirectory: directory),
+            "classic save rejected under Hunqian profile");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static void TestOptionalHunqianRuntime()
+{
+    string? root = Environment.GetEnvironmentVariable("PAL98_HUNQIAN167_RUNTIME_GAME");
+    if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+    {
+        Console.WriteLine("SKIP  optional Hunqian runtime (PAL98_HUNQIAN167_RUNTIME_GAME not set)");
+        return;
+    }
+
+    PalSaveDocument first = PalSaveDocument.Load(Path.Combine(root, "1.RPG"), gameDirectory: root);
+    PalSaveDocument second = PalSaveDocument.Load(Path.Combine(root, "2.RPG"), gameDirectory: root);
+    Equal(184_688, first.Length, "Hunqian runtime slot 1 length");
+    Equal(184_688, second.Length, "Hunqian runtime slot 2 length");
+    Equal("pal98.hunqian167.easy", first.Catalog!.ActiveProfileId!, "Hunqian runtime profile");
+    True(!first.Detection.IsHeuristic && !second.Detection.IsHeuristic, "Hunqian runtime resource proof");
+
+    string thirdPath = Path.Combine(root, "3.RPG");
+    if (File.Exists(thirdPath) && new FileInfo(thirdPath).Length == SaveFormatDetector.KnownPal98Length)
+    {
+        Throws<InvalidDataException>(
+            () => PalSaveDocument.Load(thirdPath, gameDirectory: root),
+            "Hunqian runtime rejects Classic slot");
+    }
+}
+
 static void TestRealSamples()
 {
     var winSave = @"D:\SteamLibrary\steamapps\common\PAL\PAL98\1.RPG";
@@ -321,6 +429,37 @@ static void FillTail(byte[] bytes, int offset)
     {
         bytes[i] = (byte)(i * 31);
     }
+}
+
+static byte[] BuildMkf(params byte[][] chunks)
+{
+    int headerLength = (chunks.Length + 1) * sizeof(uint);
+    int totalLength = headerLength + chunks.Sum(chunk => chunk.Length);
+    byte[] result = new byte[totalLength];
+    int offset = headerLength;
+    for (int index = 0; index < chunks.Length; index++)
+    {
+        BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(index * 4), (uint)offset);
+        chunks[index].CopyTo(result, offset);
+        offset += chunks[index].Length;
+    }
+    BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(chunks.Length * 4), (uint)offset);
+    return result;
+}
+
+static string ProfileResourceJson(string kind, string relativePath, string path) =>
+    "{" +
+    $"\"kind\":\"{kind}\"," +
+    $"\"relative_path\":\"{relativePath}\"," +
+    $"\"sha256\":\"{HashFile(path)}\"," +
+    $"\"size_bytes\":{new FileInfo(path).Length}" +
+    "}";
+
+static string HashFile(string path)
+{
+    using FileStream stream = File.OpenRead(path);
+    using SHA256 sha256 = SHA256.Create();
+    return BitConverter.ToString(sha256.ComputeHash(stream)).Replace("-", string.Empty).ToLowerInvariant();
 }
 
 static void WriteQueueRecord(byte[] bytes, int queueIndex, ushort id, byte marker)

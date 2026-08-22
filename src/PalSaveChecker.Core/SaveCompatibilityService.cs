@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using PalSaveEditor.Core;
 
 namespace PalSaveChecker.Core;
 
@@ -8,6 +9,7 @@ public enum SaveCheckStatus
     Missing,
     Clean,
     Polluted,
+    Incompatible,
     Unreadable,
 }
 
@@ -27,7 +29,8 @@ public sealed record SaveCheckReport(
     IReadOnlyList<SaveCheckItem> Saves)
 {
     public bool CanRepair => ReferenceError is null && Saves.Any(item => item.Status == SaveCheckStatus.Polluted);
-    public bool HasProblems => ReferenceError is not null || Saves.Any(item => item.Status is SaveCheckStatus.Polluted or SaveCheckStatus.Unreadable);
+    public bool HasProblems => ReferenceError is not null || Saves.Any(item =>
+        item.Status is SaveCheckStatus.Polluted or SaveCheckStatus.Incompatible or SaveCheckStatus.Unreadable);
 }
 
 public sealed record SaveRepairItem(
@@ -66,6 +69,9 @@ public sealed class SaveCompatibilityService
     internal const int ObjectRecordSize = 14;
     internal const int MaximumSavedObjectCount = 600;
     private const int ScriptRecordSize = 8;
+    private const int EventRecordSize = 32;
+    private const int SaveEventObjectOffset = 14_064;
+    private const int SssEventChunkIndex = 0;
     private const int SssObjectChunkIndex = 2;
     private const int SssScriptChunkIndex = 4;
 
@@ -93,7 +99,7 @@ public sealed class SaveCompatibilityService
 
         foreach (SaveCheckItem item in before.Saves)
         {
-            if (item.Status == SaveCheckStatus.Unreadable)
+            if (item.Status is SaveCheckStatus.Incompatible or SaveCheckStatus.Unreadable)
             {
                 results.Add(new SaveRepairItem(item.FileName, false, item.Error ?? "存档无法读取。"));
                 continue;
@@ -230,9 +236,15 @@ public sealed class SaveCompatibilityService
     {
         if (!analysis.Repairable)
         {
-            return new SaveCheckItem(fileName, SaveCheckStatus.Unreadable, false,
+            SaveCheckStatus status = analysis.IsLayoutMismatch
+                ? SaveCheckStatus.Incompatible
+                : SaveCheckStatus.Unreadable;
+            string failureRisk = analysis.IsLayoutMismatch
+                ? "剧情版本或事件流程布局不匹配；不能用对象字段修复代替剧情状态迁移。"
+                : "存档结构异常，自动修复可能破坏进度。";
+            return new SaveCheckItem(fileName, status, false,
                 analysis.DefinitionMismatchCount, analysis.InvalidScriptCount,
-                "存档结构异常，自动修复可能破坏进度。", analysis.Error);
+                failureRisk, analysis.Error);
         }
         if (analysis.IsClean)
         {
@@ -249,6 +261,25 @@ public sealed class SaveCompatibilityService
 
     private static Analysis Analyze(byte[] saveBytes, ReferenceData reference)
     {
+        int expectedLength = checked(SaveEventObjectOffset + reference.EventObjectBytes);
+        if (saveBytes.Length != expectedLength)
+        {
+            int actualEventBytes = saveBytes.Length - SaveEventObjectOffset;
+            string actualRecords = actualEventBytes >= 0 && actualEventBytes % EventRecordSize == 0
+                ? (actualEventBytes / EventRecordSize).ToString("N0")
+                : "非整记录";
+            int missingRecords = actualEventBytes >= 0 && actualEventBytes < reference.EventObjectBytes &&
+                                 actualEventBytes % EventRecordSize == 0
+                ? (reference.EventObjectBytes - actualEventBytes) / EventRecordSize
+                : 0;
+            string difference = missingRecords > 0 ? $"，缺少 {missingRecords:N0} 条" : string.Empty;
+            return Analysis.Unrepairable(
+                $"文件 {saveBytes.Length:N0} 字节；当前资源要求 Win95/PALDLL 存档 {expectedLength:N0} 字节" +
+                $"（固定区 {SaveEventObjectOffset:N0} + {reference.EventObjectBytes / EventRecordSize:N0} 条事件记录），" +
+                $"当前仅对应 {actualRecords} 条{difference}。缺失或多出的剧情事件状态无法从 SSS.MKF 自动重建。",
+                isLayoutMismatch: true);
+        }
+
         int requiredLength = checked(SaveObjectTableOffset + reference.ObjectCount * ObjectRecordSize);
         if (saveBytes.Length < requiredLength)
         {
@@ -358,6 +389,15 @@ public sealed class SaveCompatibilityService
         error = null;
         try
         {
+            PalGameResourceContext resourceContext = PalGameResourceContextResolver.Resolve(root);
+            if (resourceContext.IsActiveProfile)
+            {
+                string activeSssPath = Path.Combine(resourceContext.ResourceDirectory, "SSS.MKF");
+                reference = ReferenceData.Parse(ReadAllBytesShared(activeSssPath));
+                description = resourceContext.DescribeResource("SSS.MKF");
+                return true;
+            }
+
             string configPath = Path.Combine(root, "config.ini");
             if (!File.Exists(configPath))
             {
@@ -597,15 +637,21 @@ public sealed class SaveCompatibilityService
         int DefinitionMismatchCount,
         int InvalidScriptCount,
         HashSet<(int ObjectId, int Field)> FieldRepairs,
-        string? Error)
+        string? Error,
+        bool IsLayoutMismatch = false)
     {
         public bool Repairable => Error is null;
         public bool IsClean => Repairable && DefinitionMismatchCount == 0 && InvalidScriptCount == 0;
 
-        public static Analysis Unrepairable(string error) => new(0, 0, [], error);
+        public static Analysis Unrepairable(string error, bool isLayoutMismatch = false) =>
+            new(0, 0, [], error, isLayoutMismatch);
     }
 
-    private sealed record ReferenceData(byte[] ObjectBytes, int ObjectCount, int ScriptCount)
+    private sealed record ReferenceData(
+        byte[] ObjectBytes,
+        int ObjectCount,
+        int ScriptCount,
+        int EventObjectBytes)
     {
         public static ReferenceData Parse(byte[] bytes)
         {
@@ -624,10 +670,16 @@ public sealed class SaveCompatibilityService
                 throw new InvalidDataException("SSS.MKF 缺少对象或脚本块。 ");
             }
 
+            (int eventStart, int eventEnd) = ReadChunkBounds(bytes, chunkCount, SssEventChunkIndex);
             (int objectStart, int objectEnd) = ReadChunkBounds(bytes, chunkCount, SssObjectChunkIndex);
             (int scriptStart, int scriptEnd) = ReadChunkBounds(bytes, chunkCount, SssScriptChunkIndex);
             int objectLength = objectEnd - objectStart;
             int scriptLength = scriptEnd - scriptStart;
+            int eventLength = eventEnd - eventStart;
+            if (eventLength <= 0 || eventLength % EventRecordSize != 0)
+            {
+                throw new InvalidDataException("SSS.MKF 事件记录宽度不匹配仙剑 98。 ");
+            }
             if (objectLength <= 0 || objectLength % ObjectRecordSize != 0 ||
                 scriptLength <= 0 || scriptLength % ScriptRecordSize != 0)
             {
@@ -639,7 +691,7 @@ public sealed class SaveCompatibilityService
                 throw new InvalidDataException($"SSS.MKF 对象数 {objectCount} 超出存档容量。 ");
             }
             return new ReferenceData(bytes.AsSpan(objectStart, objectLength).ToArray(),
-                objectCount, scriptLength / ScriptRecordSize);
+                objectCount, scriptLength / ScriptRecordSize, eventLength);
         }
 
         private static (int Start, int End) ReadChunkBounds(byte[] bytes, int chunkCount, int index)

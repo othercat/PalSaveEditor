@@ -11,7 +11,10 @@ Run("polluted save repair without retained backup", TestPollutedSaveRepairWithou
 Run("dynamic script state boundary", TestDynamicScriptBoundary);
 Run("GBK config and Chinese patch name", TestGbkConfig);
 Run("invalid patch fails closed", TestInvalidPatchFailsClosed);
+Run("active profile layout mismatch fails closed", TestActiveProfileLayoutMismatch);
+Run("invalid active profile does not fall back", TestInvalidActiveProfileFailsClosed);
 Run("running game repair policy", TestRunningGameRepairPolicy);
+Run("optional Hunqian 1.67 runtime read-only check", TestOptionalHunqianRuntime);
 Run("optional real runtime isolated repair", TestOptionalRealRuntime);
 
 if (failures.Count > 0)
@@ -161,6 +164,50 @@ static void TestGbkConfig()
     Contains(report.ReferenceDescription, "剧情补丁.zip", "Chinese patch path");
 }
 
+static void TestActiveProfileLayoutMismatch()
+{
+    using Fixture fixture = Fixture.Create(eventObjectBytes: 170_624);
+    fixture.EnableActiveProfile("pal98.hunqian167.easy", "1.0.0", "魂牵梦萦 1.67 简单 兼容配置档");
+    string incompatiblePath = Path.Combine(fixture.Root, "2.RPG");
+    byte[] compatible = File.ReadAllBytes(Path.Combine(fixture.Root, "1.RPG"));
+    File.WriteAllBytes(incompatiblePath, compatible.AsSpan(0, 176_528).ToArray());
+    byte[] before = File.ReadAllBytes(incompatiblePath);
+
+    var service = new SaveCompatibilityService();
+    SaveCheckReport report = service.Check(fixture.Root);
+    Contains(report.ReferenceDescription, "pal98.hunqian167.easy@1.0.0", "active profile reference");
+    Equal(SaveCheckStatus.Clean, report.Saves[0].Status, "profile-compatible save");
+    Equal(SaveCheckStatus.Incompatible, report.Saves[1].Status, "classic-length save rejected");
+    Equal(false, report.Saves[1].Repairable, "layout mismatch is not repairable");
+    Contains(report.Saves[1].Error, "184,688", "expected profile save length");
+    Contains(report.Saves[1].Error, "255", "missing event records");
+    Equal(false, report.CanRepair, "layout mismatch does not enable repair");
+
+    SaveRepairReport repair = service.Repair(fixture.Root);
+    Equal(true, repair.HasFailures, "incompatible save remains a reported failure");
+    SequenceEqual(before, File.ReadAllBytes(incompatiblePath), "incompatible save untouched");
+}
+
+static void TestInvalidActiveProfileFailsClosed()
+{
+    using Fixture fixture = Fixture.Create(eventObjectBytes: 170_624);
+    fixture.EnableActiveProfile("pal98.hunqian167.easy", "1.0.0", "魂牵梦萦 1.67 简单 兼容配置档");
+    string descriptor = Path.Combine(
+        fixture.Root,
+        "palmod",
+        "Profiles",
+        "pal98.hunqian167.easy",
+        "1.0.0",
+        "manifest",
+        "game-profile.json");
+    File.AppendAllText(descriptor, " ");
+
+    SaveCheckReport report = new SaveCompatibilityService().Check(fixture.Root);
+    Equal(true, report.ReferenceError is not null, "tampered active profile rejected");
+    Contains(report.ReferenceError, "SHA-256", "descriptor identity failure reported");
+    Equal(SaveCheckStatus.Unreadable, report.Saves[0].Status, "no fallback to patch ZIP");
+}
+
 static void TestRunningGameRepairPolicy()
 {
     RepairRunDecision stopped = RepairRunPolicy.Evaluate(isPalRunning: false);
@@ -171,6 +218,28 @@ static void TestRunningGameRepairPolicy()
     Equal(true, running.CanRepair, "running game repair allowed");
     Contains(running.Warning, "可以修复磁盘存档", "running game warning allows repair");
     Contains(running.Warning, "再次保存同一槽位", "running game overwrite warning");
+}
+
+static void TestOptionalHunqianRuntime()
+{
+    string? root = Environment.GetEnvironmentVariable("PAL98_HUNQIAN167_RUNTIME_GAME");
+    if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+    {
+        Console.WriteLine("SKIP optional Hunqian runtime (PAL98_HUNQIAN167_RUNTIME_GAME not set)");
+        return;
+    }
+
+    SaveCheckReport report = new SaveCompatibilityService().Check(root);
+    Contains(report.ReferenceDescription, "pal98.hunqian167", "Hunqian active profile reference");
+    foreach (SaveCheckItem item in report.Saves)
+    {
+        Console.WriteLine(
+            $"HUNQIAN {item.FileName} status={item.Status} definitions={item.DefinitionMismatchCount} " +
+            $"scripts={item.InvalidScriptCount} error={item.Error}");
+    }
+
+    Equal(false, report.Saves[0].Status == SaveCheckStatus.Incompatible, "Hunqian slot 1 layout");
+    Equal(false, report.Saves[1].Status == SaveCheckStatus.Incompatible, "Hunqian slot 2 layout");
 }
 
 static void TestOptionalRealRuntime()
@@ -310,9 +379,12 @@ static void WriteUInt16(byte[] bytes, int offset, ushort value)
 
 file sealed class Fixture : IDisposable
 {
-    private Fixture(string root)
+    private readonly byte[] _sssBytes;
+
+    private Fixture(string root, byte[] sssBytes)
     {
         Root = root;
+        _sssBytes = sssBytes;
     }
 
     public string Root { get; }
@@ -320,7 +392,8 @@ file sealed class Fixture : IDisposable
     public static Fixture Create(
         int scriptCount = 16,
         string patchName = "fixture-patch",
-        Encoding? configEncoding = null)
+        Encoding? configEncoding = null,
+        int eventObjectBytes = 64)
     {
         string root = Path.Combine(Path.GetTempPath(), $"PalSaveCheckerTests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -340,8 +413,13 @@ file sealed class Fixture : IDisposable
                     IsScriptField(objectId, field) ? (ushort)1 : (ushort)(objectId * 7 + field));
             }
         }
+        if (eventObjectBytes <= 0 || eventObjectBytes % 32 != 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(eventObjectBytes));
+        }
+        byte[] events = new byte[eventObjectBytes];
         byte[] scripts = new byte[scriptCount * 8];
-        byte[] sss = BuildMkf([], [], objects, [], scripts);
+        byte[] sss = BuildMkf(events, [], objects, [], scripts);
         string zipPath = Path.Combine(root, "patches", $"{patchName}.zip");
         using (ZipArchive zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
         {
@@ -350,14 +428,65 @@ file sealed class Fixture : IDisposable
             stream.Write(sss, 0, sss.Length);
         }
 
-        byte[] save = new byte[0x1620 + objects.Length + 64];
+        byte[] save = new byte[14_064 + eventObjectBytes];
         Buffer.BlockCopy(objects, 0, save, 0x1620, objects.Length);
         for (int index = 0x1620 + objects.Length; index < save.Length; index++)
         {
             save[index] = (byte)(index * 13);
         }
         File.WriteAllBytes(Path.Combine(root, "1.RPG"), save);
-        return new Fixture(root);
+        return new Fixture(root, sss);
+    }
+
+    public void EnableActiveProfile(string profileId, string profileVersion, string displayName)
+    {
+        string staged = Path.Combine(Root, "palmod", "Profiles", profileId, profileVersion);
+        string resources = Directory.CreateDirectory(Path.Combine(staged, "resources")).FullName;
+        string manifest = Directory.CreateDirectory(Path.Combine(staged, "manifest")).FullName;
+        string sssPath = Path.Combine(resources, "SSS.MKF");
+        string wordPath = Path.Combine(resources, "WORD.DAT");
+        File.WriteAllBytes(sssPath, _sssBytes);
+        File.WriteAllBytes(wordPath, new byte[5_750]);
+
+        string descriptor =
+            "{" +
+            "\"schema\":\"PAL98.GameProfile.v1\"," +
+            $"\"profile_id\":\"{profileId}\"," +
+            $"\"profile_version\":\"{profileVersion}\"," +
+            $"\"display_name\":\"{displayName}\"," +
+            "\"resource_set\":[" +
+            ResourceJson("SSS.MKF", "resources/SSS.MKF", sssPath) + "," +
+            ResourceJson("WORD.DAT", "resources/WORD.DAT", wordPath) +
+            "]}";
+        string descriptorPath = Path.Combine(manifest, "game-profile.json");
+        File.WriteAllText(descriptorPath, descriptor, new UTF8Encoding(false));
+        string descriptorHash = HashFileLocal(descriptorPath).ToLowerInvariant();
+
+        string profiles = Directory.CreateDirectory(Path.Combine(Root, "palmod", "Profiles")).FullName;
+        string pointer =
+            "{" +
+            "\"schema\":\"PAL98.EffectiveGameProfilePointer.v1\"," +
+            $"\"profile_id\":\"{profileId}\"," +
+            $"\"profile_version\":\"{profileVersion}\"," +
+            $"\"descriptor_sha256\":\"{descriptorHash}\"," +
+            $"\"staging_relative_path\":\"{profileId}/{profileVersion}\"" +
+            "}";
+        File.WriteAllText(Path.Combine(profiles, "current.json"), pointer, new UTF8Encoding(false));
+    }
+
+    private static string ResourceJson(string kind, string relativePath, string path) =>
+        "{" +
+        $"\"kind\":\"{kind}\"," +
+        $"\"relative_path\":\"{relativePath}\"," +
+        $"\"sha256\":\"{HashFileLocal(path).ToLowerInvariant()}\"," +
+        $"\"size_bytes\":{new FileInfo(path).Length}" +
+        "}";
+
+    private static string HashFileLocal(string path)
+    {
+        using FileStream stream = File.OpenRead(path);
+        using SHA256 sha256 = SHA256.Create();
+        return BitConverter.ToString(sha256.ComputeHash(stream)).Replace("-", string.Empty);
     }
 
     public void Dispose()

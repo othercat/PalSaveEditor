@@ -747,9 +747,17 @@ internal sealed class MainForm : Form
             $"证据强度：{(_document.Detection.IsHeuristic ? "长度/边界启发式，可手动复核" : "配套资源复核")}";
         _resourceInfo.Text = _document.Catalog is null
             ? "游戏资料：未加载。物品和法术将显示为编号；可点击工具栏“游戏资料目录”。"
-            : $"游戏资料：{_document.Catalog.SourceDirectory}  |  WORD {_document.Catalog.WordCount} 条  |  " +
-              $"对象记录 {_document.Catalog.ObjectRecordSize} 字节  |  事件区 {_document.Catalog.EventObjectBytes:N0} 字节";
+            : BuildResourceInfo(_document.Catalog);
         _status.Text = $"{_document.Format.GetDisplayName()} · {_document.Length:N0} 字节 · {Path.GetFileName(_document.Path)}";
+    }
+
+    private static string BuildResourceInfo(PalResourceCatalog catalog)
+    {
+        string profile = catalog.IsActiveProfile
+            ? $"active profile {catalog.ActiveProfileId}@{catalog.ActiveProfileVersion}（{catalog.ActiveProfileDisplayName}）  |  "
+            : string.Empty;
+        return $"游戏资料：{profile}{catalog.SourceDirectory}  |  WORD {catalog.WordCount} 条  |  " +
+               $"对象记录 {catalog.ObjectRecordSize} 字节  |  事件区 {catalog.EventObjectBytes:N0} 字节";
     }
 
     private void AddPartyMember()

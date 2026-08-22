@@ -1,6 +1,6 @@
 # 存档格式证据与实现边界
 
-状态：`Recovered`（PAL98 固定布局）、`Corroborated`（DOS 固定布局）、`Recovered/Corroborated`（梦幻 2.20 的 DOS 原版与 PALDLL/Win95 移植布局）。
+状态：`Recovered`（PAL98 固定布局）、`Corroborated`（DOS 固定布局）、`Recovered/Corroborated`（梦幻 2.20 的 DOS 原版与 PALDLL/Win95 移植布局）、`Profile-validated`（魂牵梦萦 1.67 PALDLL/Win95 布局；剧情实机待人工验收）。
 
 ## 公共固定区
 
@@ -55,6 +55,24 @@ PALDLL_DX9 的梦幻 2.20 移植补丁使用仙剑 98/Win95 存档固定区，�
 ```
 
 游戏根目录保留的是普通仙剑98资源；PALDLL 通过 `palmod/Profiles/current.json` 指向当前 staging，并把读取重定向到其 `resources`。该有效配置档中的 `SSS.MKF` chunk 0 为 171,808 字节、对象记录为 14 字节，`WORD.DAT` 为 565 个十字节记录。因此编辑器也沿这条有效配置档链读取资源。此类存档必须按 Win95 布局编辑；选择 DOS 梦幻布局应当失败关闭，而不是越界写入。
+
+## 魂牵梦萦 1.67
+
+原作者为 **千年女尸的爱**。简单、困难两版原始 SSS0 都有 5,332 条事件记录；PALDLL 构建把 575 条 DOS 12 字节对象记录转换为 Win95 14 字节记录，事件状态数量保持不变。因此 Windows PALDLL profile 的精确存档长度为：
+
+```text
+184688 - 14064 = 170624 = 5332 × 32
+```
+
+原 SDLPal/DOS 资源对应的 183,488 字节仅说明同一事件数位于 DOS 固定前缀之后：
+
+```text
+183488 - 12864 = 170624 = 5332 × 32
+```
+
+这两个文件并不能互换：对象区宽度不同。原版 PAL98 的 176,528 字节存档虽然也是合法 Win95 边界，但只有 5,077 条事件记录，比魂牵少 255 条。缺失记录是脚本流程状态，不是对象定义污染；工具只能拒绝，不能从当前 SSS 初始值推导已经发生过的剧情。
+
+编辑器和检查器沿 `palmod/Profiles/current.json -> manifest/game-profile.json -> resources` 读取 active profile，并校验 pointer/descriptor、`WORD.DAT`、`SSS.MKF` 的长度与 SHA-256。存在 pointer 但身份链无效时失败关闭，不回退到根目录 Classic 资源。当前自动验证覆盖格式识别、错误版本拒绝、普通字段写回以及整个事件尾部逐字节保留；不声称剧情运行时已验收。
 
 ## 固定样本身份
 

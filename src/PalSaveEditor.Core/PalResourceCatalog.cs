@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Text;
-using System.Text.Json;
 
 namespace PalSaveEditor.Core;
 
@@ -10,14 +9,15 @@ public sealed class PalResourceCatalog
     private readonly ushort[]? _objectFlags;
 
     private PalResourceCatalog(
-        string sourceDirectory,
+        PalGameResourceContext resourceContext,
         string[] words,
         int wordDatByteLength,
         ushort[]? objectFlags,
         int objectRecordSize,
         int eventObjectBytes)
     {
-        SourceDirectory = sourceDirectory;
+        ResourceContext = resourceContext;
+        SourceDirectory = resourceContext.ResourceDirectory;
         _words = words;
         WordDatByteLength = wordDatByteLength;
         _objectFlags = objectFlags;
@@ -26,6 +26,11 @@ public sealed class PalResourceCatalog
     }
 
     public string SourceDirectory { get; }
+    public PalGameResourceContext ResourceContext { get; }
+    public string? ActiveProfileId => ResourceContext.ProfileId;
+    public string? ActiveProfileVersion => ResourceContext.ProfileVersion;
+    public string? ActiveProfileDisplayName => ResourceContext.ProfileDisplayName;
+    public bool IsActiveProfile => ResourceContext.IsActiveProfile;
     public int WordCount => _words.Length;
     public int WordDatByteLength { get; }
     public int ObjectRecordSize { get; }
@@ -57,8 +62,8 @@ public sealed class PalResourceCatalog
         {
             throw new ArgumentException("游戏资料目录不能为空。", nameof(gameDirectory));
         }
-        var requestedDirectory = Path.GetFullPath(gameDirectory);
-        var fullDirectory = TryResolveActiveProfileResources(requestedDirectory) ?? requestedDirectory;
+        var resourceContext = PalGameResourceContextResolver.Resolve(gameDirectory);
+        var fullDirectory = resourceContext.ResourceDirectory;
         var wordPath = Path.Combine(fullDirectory, "WORD.DAT");
         if (!File.Exists(wordPath))
         {
@@ -119,7 +124,7 @@ public sealed class PalResourceCatalog
             words[i] = wordEncoding.GetString(wordBytes, recordOffset, length).Trim();
         }
 
-        return new(fullDirectory, words, wordBytes.Length, flags, recordSize, eventObjectBytes);
+        return new(resourceContext, words, wordBytes.Length, flags, recordSize, eventObjectBytes);
     }
 
     public string GetWord(int id, string fallbackPrefix = "对象")
@@ -170,57 +175,6 @@ public sealed class PalResourceCatalog
         if (parent is not null)
         {
             yield return parent.FullName;
-        }
-    }
-
-    private static string? TryResolveActiveProfileResources(string gameDirectory)
-    {
-        var profilesDirectory = Path.Combine(gameDirectory, "palmod", "Profiles");
-        var pointerPath = Path.Combine(profilesDirectory, "current.json");
-        if (!File.Exists(pointerPath))
-        {
-            return null;
-        }
-
-        try
-        {
-            using var pointer = JsonDocument.Parse(File.ReadAllBytes(pointerPath));
-            if (!pointer.RootElement.TryGetProperty("staging_relative_path", out var relativeElement))
-            {
-                return null;
-            }
-
-            var relativePath = relativeElement.GetString();
-            if (string.IsNullOrWhiteSpace(relativePath) || Path.IsPathRooted(relativePath))
-            {
-                return null;
-            }
-
-            var profilesRoot = Path.GetFullPath(profilesDirectory);
-            var stagedDirectory = Path.GetFullPath(Path.Combine(profilesRoot, relativePath));
-            var profilesPrefix = profilesRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
-                                 Path.DirectorySeparatorChar;
-            if (!stagedDirectory.StartsWith(profilesPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return null;
-            }
-
-            var resourcesDirectory = Path.Combine(stagedDirectory, "resources");
-            return File.Exists(Path.Combine(resourcesDirectory, "WORD.DAT"))
-                ? resourcesDirectory
-                : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
         }
     }
 

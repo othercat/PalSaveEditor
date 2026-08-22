@@ -96,15 +96,21 @@ public sealed class PalSaveDocument
 
     public void SetCatalog(PalResourceCatalog catalog)
     {
-        Catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
-        Detection = SaveFormatDetector.Detect(
+        if (catalog is null)
+        {
+            throw new ArgumentNullException(nameof(catalog));
+        }
+
+        SaveFormatDetection detection = SaveFormatDetector.Detect(
             _bytes.Length,
             catalog.WordDatByteLength,
             catalog.ObjectRecordSize,
             catalog.EventObjectBytes);
-        if (Detection.Format is SaveFormat.Dream220Dos or SaveFormat.Dream220Win95)
+        Catalog = catalog;
+        Detection = detection;
+        if (detection.Format is SaveFormat.Dream220Dos or SaveFormat.Dream220Win95)
         {
-            Format = Detection.Format;
+            Format = detection.Format;
         }
     }
 
