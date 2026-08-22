@@ -2,6 +2,8 @@ namespace PalSaveEditor.Core;
 
 public sealed record PartyMember(int PartyIndex, ushort RoleId);
 
+public sealed record Follower(int FollowerIndex, ushort SpriteId);
+
 public sealed record RoleSnapshot(
     int RoleId,
     ushort NameWordId,

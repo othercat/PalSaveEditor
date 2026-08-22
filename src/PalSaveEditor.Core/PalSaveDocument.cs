@@ -40,7 +40,7 @@ public sealed class PalSaveDocument
     public int PartyCount
     {
         get => Math.Clamp(ReadUInt16(PalSaveLayout.PartyMaxIndexOffset) + 1, 1, PalSaveLayout.PartyCapacity);
-        set
+        private set
         {
             if (value is < 1 or > PalSaveLayout.PartyCapacity)
             {
@@ -133,11 +133,117 @@ public sealed class PalSaveDocument
             throw new InvalidDataException("队伍中不能有重复角色。");
         }
 
-        PartyCount = roleIds.Count;
-        for (var i = 0; i < PalSaveLayout.PartyCapacity; i++)
+        var oldPartyCount = PartyCount;
+        var followerRecords = ReadFollowerRecords(oldPartyCount);
+        if (roleIds.Count + followerRecords.Count > PalSaveLayout.PartyCapacity)
         {
-            WriteUInt16(PalSaveLayout.PartyRoleOffset(i), i < roleIds.Count ? roleIds[i] : (ushort)0);
+            throw new InvalidDataException(
+                $"正式队员 {roleIds.Count} 人与随从 {followerRecords.Count} 人合计超过 {PalSaveLayout.PartyCapacity} 条队列容量。");
         }
+
+        var partyRecords = new List<byte[]>(roleIds.Count);
+        for (var i = 0; i < roleIds.Count; i++)
+        {
+            var record = i < oldPartyCount ? ReadQueueRecord(i) : new byte[PalSaveLayout.PartyEntrySize];
+            BinaryPrimitives.WriteUInt16LittleEndian(record, roleIds[i]);
+            partyRecords.Add(record);
+        }
+
+        WriteQueue(partyRecords, followerRecords);
+        PartyCount = roleIds.Count;
+    }
+
+    public int FollowerCount
+    {
+        get
+        {
+            var count = ReadUInt16(PalSaveLayout.FollowerOffset);
+            if (count > PalSaveLayout.FollowerCapacity || PartyCount + count > PalSaveLayout.PartyCapacity)
+            {
+                throw new InvalidDataException(
+                    $"随从数量或队列范围无效：正式队员 {PartyCount}，随从 {count}，队列容量 {PalSaveLayout.PartyCapacity}。");
+            }
+
+            return count;
+        }
+    }
+
+    public IReadOnlyList<Follower> GetFollowers()
+    {
+        var count = FollowerCount;
+        var result = new List<Follower>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var spriteId = ReadUInt16(PalSaveLayout.PartyRoleOffset(PartyCount + i));
+            if (spriteId == 0)
+            {
+                throw new InvalidDataException($"随从 {i + 1} 的 MGO 形象编号为 0，与随从数量不一致。");
+            }
+            result.Add(new(i, spriteId));
+        }
+        return result;
+    }
+
+    public void SetFollowers(IReadOnlyList<ushort> spriteIds)
+    {
+        ArgumentNullException.ThrowIfNull(spriteIds);
+        if (spriteIds.Count > PalSaveLayout.FollowerCapacity)
+        {
+            throw new ArgumentOutOfRangeException(nameof(spriteIds), $"随从人数最多为 {PalSaveLayout.FollowerCapacity}。");
+        }
+        if (PartyCount + spriteIds.Count > PalSaveLayout.PartyCapacity)
+        {
+            throw new InvalidDataException(
+                $"正式队员 {PartyCount} 人与随从 {spriteIds.Count} 人合计超过 {PalSaveLayout.PartyCapacity} 条队列容量。");
+        }
+        if (spriteIds.Any(id => id == 0))
+        {
+            throw new ArgumentOutOfRangeException(nameof(spriteIds), "随从 MGO 形象编号必须为 1 到 65535。");
+        }
+
+        var partyRecords = Enumerable.Range(0, PartyCount).Select(ReadQueueRecord).ToList();
+        var existingFollowers = ReadFollowerRecords(PartyCount);
+        var usedExistingFollowers = new bool[existingFollowers.Count];
+        var followerRecords = new List<byte[]>(spriteIds.Count);
+        for (var i = 0; i < spriteIds.Count; i++)
+        {
+            var existingIndex = -1;
+            if (i < existingFollowers.Count &&
+                !usedExistingFollowers[i] &&
+                BinaryPrimitives.ReadUInt16LittleEndian(existingFollowers[i]) == spriteIds[i])
+            {
+                existingIndex = i;
+            }
+            else
+            {
+                for (var candidate = 0; candidate < existingFollowers.Count; candidate++)
+                {
+                    if (!usedExistingFollowers[candidate] &&
+                        BinaryPrimitives.ReadUInt16LittleEndian(existingFollowers[candidate]) == spriteIds[i])
+                    {
+                        existingIndex = candidate;
+                        break;
+                    }
+                }
+            }
+            if (existingIndex < 0 && i < existingFollowers.Count && !usedExistingFollowers[i])
+            {
+                existingIndex = i;
+            }
+
+            var record = existingIndex >= 0
+                ? existingFollowers[existingIndex]
+                : new byte[PalSaveLayout.PartyEntrySize];
+            if (existingIndex >= 0)
+            {
+                usedExistingFollowers[existingIndex] = true;
+            }
+            BinaryPrimitives.WriteUInt16LittleEndian(record, spriteIds[i]);
+            followerRecords.Add(record);
+        }
+
+        WriteQueue(partyRecords, followerRecords);
+        WriteUInt16(PalSaveLayout.FollowerOffset, checked((ushort)spriteIds.Count));
     }
 
     public RoleSnapshot GetRole(int roleId)
@@ -482,6 +588,53 @@ public sealed class PalSaveDocument
             WriteUInt16(offset, entries[slot].Item);
             WriteUInt16(offset + 2, entries[slot].Amount);
             WriteUInt16(offset + 4, entries[slot].InUse);
+        }
+    }
+
+    private List<byte[]> ReadFollowerRecords(int partyCount)
+    {
+        var count = FollowerCount;
+        var result = new List<byte[]>(count);
+        for (var i = 0; i < count; i++)
+        {
+            result.Add(ReadQueueRecord(partyCount + i));
+        }
+        return result;
+    }
+
+    private byte[] ReadQueueRecord(int queueIndex)
+    {
+        if ((uint)queueIndex >= PalSaveLayout.PartyCapacity)
+        {
+            throw new ArgumentOutOfRangeException(nameof(queueIndex));
+        }
+        return _bytes.AsSpan(
+            PalSaveLayout.PartyRecordOffset(queueIndex),
+            PalSaveLayout.PartyEntrySize).ToArray();
+    }
+
+    private void WriteQueue(IReadOnlyList<byte[]> partyRecords, IReadOnlyList<byte[]> followerRecords)
+    {
+        if (partyRecords.Count + followerRecords.Count > PalSaveLayout.PartyCapacity)
+        {
+            throw new InvalidDataException("正式队员与随从超过共享队列容量。");
+        }
+
+        foreach (var record in partyRecords.Concat(followerRecords))
+        {
+            if (record.Length != PalSaveLayout.PartyEntrySize)
+            {
+                throw new InvalidDataException("队伍记录长度无效。");
+            }
+        }
+
+        _bytes.AsSpan(
+            PalSaveLayout.PartyOffset,
+            PalSaveLayout.PartyCapacity * PalSaveLayout.PartyEntrySize).Clear();
+        var queueIndex = 0;
+        foreach (var record in partyRecords.Concat(followerRecords))
+        {
+            record.CopyTo(_bytes, PalSaveLayout.PartyRecordOffset(queueIndex++));
         }
     }
 

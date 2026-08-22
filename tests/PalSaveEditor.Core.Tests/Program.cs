@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using PalSaveEditor.Core;
 
 var tests = new (string Name, Action Run)[]
@@ -5,6 +6,7 @@ var tests = new (string Name, Action Run)[]
     ("layout constants", TestLayoutConstants),
     ("known format detection", TestKnownFormatDetection),
     ("synthetic field round trip", TestSyntheticFieldRoundTrip),
+    ("party and follower shared queue round trip", TestPartyAndFollowers),
     ("inventory compression and duplicate guard", TestInventory),
     ("real sample detection and resource catalogs", TestRealSamples),
     ("safe write creates exact backup", TestSafeWrite),
@@ -46,7 +48,66 @@ static void TestLayoutConstants()
     Equal(808, PalSaveLayout.RoleFieldOffset(RoleField.WaterResistance, 0), "role water resistance offset");
     Equal(820, PalSaveLayout.RoleFieldOffset(RoleField.FireResistance, 0), "role fire resistance offset");
     Equal(832, PalSaveLayout.RoleFieldOffset(RoleField.EarthResistance, 0), "role earth resistance offset");
+    Equal(1_276, PalSaveLayout.RoleFieldOffset(RoleField.WalkFrames, 0), "role walk-frame upper bound offset");
+    Equal(1_278, PalSaveLayout.RoleFieldOffset(RoleField.WalkFrames, 1), "second role walk-frame upper bound offset");
     Equal(892, PalSaveLayout.MagicOffset(0, 0), "magic offset");
+}
+
+static void TestPartyAndFollowers()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var path = Path.Combine(directory, "party-followers.rpg");
+        var bytes = new byte[PalSaveLayout.WinEventObjectOffset + 32];
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(PalSaveLayout.PartyMaxIndexOffset), 1); // two party members
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(PalSaveLayout.FollowerOffset), 2);
+        WriteQueueRecord(bytes, 0, 0, 0x10);
+        WriteQueueRecord(bytes, 1, 2, 0x20);
+        WriteQueueRecord(bytes, 2, 12, 0xA0);
+        WriteQueueRecord(bytes, 3, 81, 0xB0);
+        File.WriteAllBytes(path, bytes);
+
+        var document = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        Equal(2, document.PartyCount, "initial party count");
+        Equal(2, document.FollowerCount, "initial follower count");
+        Equal((ushort)12, document.GetFollowers()[0].SpriteId, "Tian Gui Huang MGO id");
+        Equal((ushort)81, document.GetFollowers()[1].SpriteId, "Yun Yi MGO id");
+
+        document.SetParty([5, 1, 0]);
+        Equal(3, document.PartyCount, "expanded party count");
+        Equal((ushort)12, document.GetFollowers()[0].SpriteId, "first follower relocated after party resize");
+        Equal((ushort)81, document.GetFollowers()[1].SpriteId, "second follower relocated after party resize");
+        AssertQueueMarker(document.ToArray(), 3, 0xA0, "first follower record preserved");
+        AssertQueueMarker(document.ToArray(), 4, 0xB0, "second follower record preserved");
+
+        var beforeRejectedChange = document.ToArray();
+        Throws<InvalidDataException>(() => document.SetParty([0, 1, 2, 3]), "reject party plus follower overflow");
+        SequenceEqual(beforeRejectedChange, document.ToArray(), "overflow rejection is atomic");
+
+        document.SetFollowers([81, 12]);
+        Equal((ushort)81, document.GetFollowers()[0].SpriteId, "moved follower one");
+        Equal((ushort)12, document.GetFollowers()[1].SpriteId, "moved follower two");
+        AssertQueueMarker(document.ToArray(), 3, 0xB0, "second follower full record moved with sprite");
+        AssertQueueMarker(document.ToArray(), 4, 0xA0, "first follower full record moved with sprite");
+        Throws<ArgumentOutOfRangeException>(() => document.SetFollowers([0]), "reject zero follower sprite");
+        Throws<ArgumentOutOfRangeException>(() => document.SetFollowers([12, 81, 9]), "reject more than two followers");
+
+        document.SetRoleField(1, RoleField.BattleSprite, 5);
+        document.SetRoleField(1, RoleField.MapSprite, 512);
+        document.SetRoleField(1, RoleField.WalkFrames, 3);
+        document.Save(createBackup: false);
+        var reloaded = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        Equal((ushort)5, reloaded.GetRoleField(1, RoleField.BattleSprite), "snake Linger battle sprite round trip");
+        Equal((ushort)512, reloaded.GetRoleField(1, RoleField.MapSprite), "snake Linger map sprite round trip");
+        Equal((ushort)3, reloaded.GetRoleField(1, RoleField.WalkFrames), "snake Linger walk frames round trip");
+        Equal((ushort)81, reloaded.GetFollowers()[0].SpriteId, "follower round trip");
+        Equal((ushort)12, reloaded.GetFollowers()[1].SpriteId, "second follower round trip");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
 }
 
 static void TestKnownFormatDetection()
@@ -161,7 +222,7 @@ static void TestRealSamples()
     Equal(171_808, dream.Catalog.EventObjectBytes, "Dream events");
     Equal("經驗值", dream.Catalog.GetWord(2), "Dream Big5 word decoding");
 
-    if (File.Exists(palDllDreamSave))
+    if (File.Exists(palDllDreamSave) && new FileInfo(palDllDreamSave).Length == SaveFormatDetector.KnownDream220Win95Length)
     {
         var palDllDream = PalSaveDocument.Load(palDllDreamSave, gameDirectory: palDllDreamDirectory);
         Equal(SaveFormat.Dream220Win95, palDllDream.Format, "PALDLL Dream save");
@@ -176,6 +237,10 @@ static void TestRealSamples()
             "reject DOS Dream layout for PALDLL Dream save");
         palDllDream.SetFormat(SaveFormat.PalWin95);
         Equal(SaveFormat.PalWin95, palDllDream.Format, "allow Win95 layout alias for PALDLL Dream save");
+    }
+    else if (File.Exists(palDllDreamSave))
+    {
+        Console.WriteLine("SKIP  PALDLL Dream path currently contains a different-format save fixture");
     }
 
     var winCatalog = PalResourceCatalog.Load(Path.GetDirectoryName(winSave)!);
@@ -226,6 +291,22 @@ static void FillTail(byte[] bytes, int offset)
     {
         bytes[i] = (byte)(i * 31);
     }
+}
+
+static void WriteQueueRecord(byte[] bytes, int queueIndex, ushort id, byte marker)
+{
+    var offset = PalSaveLayout.PartyRecordOffset(queueIndex);
+    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(offset), id);
+    bytes.AsSpan(offset + sizeof(ushort), PalSaveLayout.PartyEntrySize - sizeof(ushort)).Fill(marker);
+}
+
+static void AssertQueueMarker(byte[] bytes, int queueIndex, byte marker, string message)
+{
+    var offset = PalSaveLayout.PartyRecordOffset(queueIndex) + sizeof(ushort);
+    var actual = bytes.AsSpan(offset, PalSaveLayout.PartyEntrySize - sizeof(ushort));
+    Span<byte> expected = stackalloc byte[PalSaveLayout.PartyEntrySize - sizeof(ushort)];
+    expected.Fill(marker);
+    SequenceEqual(expected, actual, message);
 }
 
 static void Equal<T>(T expected, T actual, string message) where T : notnull

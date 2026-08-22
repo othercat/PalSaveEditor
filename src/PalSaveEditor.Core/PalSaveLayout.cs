@@ -13,6 +13,7 @@ public static class PalSaveLayout
     public const int PartyOffset = 44;
     public const int PartyEntrySize = 10;
     public const int PartyCapacity = 5;
+    public const int FollowerCapacity = 2;
 
     public const int TrailOffset = 94;
     public const int TrailEntrySize = 6;
@@ -60,6 +61,7 @@ public static class PalSaveLayout
     public const int ChaseCyclesOffset = 30;
     public const int FollowerOffset = 32;
     public static int PartyRoleOffset(int partyIndex) => PartyOffset + partyIndex * PartyEntrySize;
+    public static int PartyRecordOffset(int queueIndex) => PartyOffset + queueIndex * PartyEntrySize;
 
     public static int ExperienceValueOffset(int category, int role) =>
         ExperienceOffset + (category * RoleCount + role) * ExperienceEntrySize;
@@ -98,6 +100,7 @@ public static class PalSaveLayout
         RoleField.WaterResistance => 25 * RoleArraySize,
         RoleField.FireResistance => 26 * RoleArraySize,
         RoleField.EarthResistance => 27 * RoleArraySize,
+        RoleField.WalkFrames => 64 * RoleArraySize,
         RoleField.CooperativeMagic => 65 * RoleArraySize,
         _ => throw new ArgumentOutOfRangeException(nameof(field), field, null),
     };
@@ -126,5 +129,6 @@ public enum RoleField
     WaterResistance,
     FireResistance,
     EarthResistance,
+    WalkFrames,
     CooperativeMagic,
 }

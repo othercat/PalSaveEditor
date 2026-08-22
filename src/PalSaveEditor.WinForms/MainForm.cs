@@ -32,6 +32,7 @@ internal sealed class MainForm : Form
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill, Enabled = false };
 
     private readonly ListBox _partyList = new() { Dock = DockStyle.Fill, IntegralHeight = false };
+    private readonly ListBox _followerList = new() { Dock = DockStyle.Fill, IntegralHeight = false };
     private readonly ComboBox _roleCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
     private readonly NumericUpDown _experience = CreateUShortNumeric();
     private readonly Dictionary<RoleField, NumericUpDown> _roleFields = new();
@@ -157,7 +158,11 @@ internal sealed class MainForm : Form
         var tab = new TabPage("主要角色");
         var split = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 285, FixedPanel = FixedPanel.Panel1 };
 
-        var partyGroup = new GroupBox { Text = "队伍中的角色", Dock = DockStyle.Fill, Padding = new(10) };
+        var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
+        left.RowStyles.Add(new(SizeType.Percent, 58));
+        left.RowStyles.Add(new(SizeType.Percent, 42));
+
+        var partyGroup = new GroupBox { Text = "正式队员", Dock = DockStyle.Fill, Padding = new(10) };
         var partyRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
         partyRoot.RowStyles.Add(new(SizeType.Percent, 100));
         partyRoot.RowStyles.Add(new(SizeType.AutoSize));
@@ -169,8 +174,25 @@ internal sealed class MainForm : Form
         partyButtons.Controls.Add(CreateButton("下移", (_, _) => MovePartyMember(1)));
         partyRoot.Controls.Add(partyButtons, 0, 1);
         partyGroup.Controls.Add(partyRoot);
+
+        var followerGroup = new GroupBox { Text = "随从（直接使用 MGO 形象编号）", Dock = DockStyle.Fill, Padding = new(10) };
+        var followerRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
+        followerRoot.RowStyles.Add(new(SizeType.Percent, 100));
+        followerRoot.RowStyles.Add(new(SizeType.AutoSize));
+        followerRoot.Controls.Add(_followerList, 0, 0);
+        var followerButtons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
+        followerButtons.Controls.Add(CreateButton("添加…", (_, _) => AddFollower()));
+        followerButtons.Controls.Add(CreateButton("修改…", (_, _) => EditFollower()));
+        followerButtons.Controls.Add(CreateButton("移除", (_, _) => RemoveFollower()));
+        followerButtons.Controls.Add(CreateButton("上移", (_, _) => MoveFollower(-1)));
+        followerButtons.Controls.Add(CreateButton("下移", (_, _) => MoveFollower(1)));
+        followerRoot.Controls.Add(followerButtons, 0, 1);
+        followerGroup.Controls.Add(followerRoot);
+
+        left.Controls.Add(partyGroup, 0, 0);
+        left.Controls.Add(followerGroup, 0, 1);
         split.Panel1.Padding = new(8);
-        split.Panel1.Controls.Add(partyGroup);
+        split.Panel1.Controls.Add(left);
 
         var right = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new(8), RowCount = 3, ColumnCount = 1 };
         right.RowStyles.Add(new(SizeType.AutoSize));
@@ -190,7 +212,7 @@ internal sealed class MainForm : Form
         var propertyRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
         propertyRoot.RowStyles.Add(new(SizeType.Percent, 100));
         propertyRoot.RowStyles.Add(new(SizeType.AutoSize));
-        var propertyTable = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new(8), ColumnCount = 4, RowCount = 7, AutoScroll = true };
+        var propertyTable = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new(8), ColumnCount = 4, RowCount = 9, AutoScroll = true };
         propertyTable.ColumnStyles.Add(new(SizeType.AutoSize));
         propertyTable.ColumnStyles.Add(new(SizeType.Percent, 50));
         propertyTable.ColumnStyles.Add(new(SizeType.AutoSize));
@@ -202,6 +224,8 @@ internal sealed class MainForm : Form
         AddNumericRow(propertyTable, 4, "防御", AddRoleField(RoleField.Defense), "身法", AddRoleField(RoleField.Dexterity));
         AddNumericRow(propertyTable, 5, "吉运", AddRoleField(RoleField.FleeRate), "抗毒", AddRoleField(RoleField.PoisonResistance));
         AddNumericRow(propertyTable, 6, "合体法术编号", AddRoleField(RoleField.CooperativeMagic), "姓名字库编号", AddRoleField(RoleField.NameWordId));
+        AddNumericRow(propertyTable, 7, "头像编号", AddRoleField(RoleField.Avatar), "战斗形象编号", AddRoleField(RoleField.BattleSprite));
+        AddNumericRow(propertyTable, 8, "地图形象编号", AddRoleField(RoleField.MapSprite), "行走帧上界（3=4 帧）", AddRoleField(RoleField.WalkFrames));
         propertyRoot.Controls.Add(propertyTable, 0, 0);
 
         var resistanceGroup = new GroupBox { Text = "五系基础抗性（可为负）", AutoSize = true, Dock = DockStyle.Fill, Padding = new(8, 4, 8, 6) };
@@ -359,6 +383,7 @@ internal sealed class MainForm : Form
                 SelectRole(choice.RoleId);
             }
         };
+        _followerList.DoubleClick += (_, _) => EditFollower();
         _roleCombo.SelectedIndexChanged += (_, _) => LoadSelectedRole();
         _experience.ValueChanged += (_, _) =>
         {
@@ -523,6 +548,7 @@ internal sealed class MainForm : Form
             _formatCombo.SelectedIndex = Math.Max(0, formatIndex);
             RefreshRoleChoices();
             RefreshParty();
+            RefreshFollowers();
             if (_roleCombo.Items.Count > 0)
             {
                 _roleCombo.SelectedIndex = 0;
@@ -560,6 +586,7 @@ internal sealed class MainForm : Form
             var index = preserveRoleId is int id ? id : 0;
             _roleCombo.SelectedIndex = Math.Clamp(index, 0, _roleCombo.Items.Count - 1);
             RefreshParty();
+            RefreshFollowers();
         }
         finally
         {
@@ -583,6 +610,25 @@ internal sealed class MainForm : Form
         if (_partyList.Items.Count > 0)
         {
             _partyList.SelectedIndex = Math.Clamp(selected, 0, _partyList.Items.Count - 1);
+        }
+    }
+
+    private void RefreshFollowers()
+    {
+        if (_document is null)
+        {
+            return;
+        }
+
+        var selected = _followerList.SelectedIndex;
+        _followerList.Items.Clear();
+        foreach (var follower in _document.GetFollowers())
+        {
+            _followerList.Items.Add(new FollowerChoice(follower.FollowerIndex, follower.SpriteId));
+        }
+        if (_followerList.Items.Count > 0)
+        {
+            _followerList.SelectedIndex = Math.Clamp(selected, 0, _followerList.Items.Count - 1);
         }
     }
 
@@ -697,9 +743,9 @@ internal sealed class MainForm : Form
         }
         var current = _document.GetParty().Select(member => member.RoleId).ToList();
         var available = Enumerable.Range(0, PalSaveLayout.RoleCount).Select(value => (ushort)value).Where(id => !current.Contains(id)).ToList();
-        if (current.Count >= PalSaveLayout.PartyCapacity || available.Count == 0)
+        if (current.Count + _document.FollowerCount >= PalSaveLayout.PartyCapacity || available.Count == 0)
         {
-            MessageBox.Show(this, "队伍已达到 5 人上限。", "队伍调整", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "正式队员与随从共享 5 条队列记录，当前已无空位。", "队伍调整", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         using var dialog = new Form { Text = "添加队员", StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, ClientSize = new(320, 120), MinimizeBox = false, MaximizeBox = false };
@@ -715,6 +761,7 @@ internal sealed class MainForm : Form
             current.Add((ushort)choice.RoleId);
             _document.SetParty(current);
             RefreshParty();
+            RefreshFollowers();
             UpdateDirtyState();
         }
     }
@@ -734,6 +781,7 @@ internal sealed class MainForm : Form
         roles.RemoveAt(_partyList.SelectedIndex);
         _document.SetParty(roles);
         RefreshParty();
+        RefreshFollowers();
         UpdateDirtyState();
     }
 
@@ -753,8 +801,152 @@ internal sealed class MainForm : Form
         (roles[source], roles[target]) = (roles[target], roles[source]);
         _document.SetParty(roles);
         RefreshParty();
+        RefreshFollowers();
         _partyList.SelectedIndex = target;
         UpdateDirtyState();
+    }
+
+    private void AddFollower()
+    {
+        if (_document is null)
+        {
+            return;
+        }
+
+        var followers = _document.GetFollowers().Select(follower => follower.SpriteId).ToList();
+        if (followers.Count >= PalSaveLayout.FollowerCapacity)
+        {
+            MessageBox.Show(this, "原版随从数量上限为 2。", "随从调整", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        if (_document.PartyCount + followers.Count >= PalSaveLayout.PartyCapacity)
+        {
+            MessageBox.Show(this, "正式队员与随从共享 5 条队列记录，当前已无空位。", "随从调整", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var spriteId = PromptFollowerSprite(12, "添加随从");
+        if (spriteId is null)
+        {
+            return;
+        }
+        followers.Add(spriteId.Value);
+        RunUiAction(() =>
+        {
+            _document.SetFollowers(followers);
+            RefreshFollowers();
+            UpdateDirtyState();
+        }, "无法添加随从");
+    }
+
+    private void EditFollower()
+    {
+        if (_document is null || _followerList.SelectedItem is not FollowerChoice selected)
+        {
+            return;
+        }
+
+        var spriteId = PromptFollowerSprite(selected.SpriteId, "修改随从");
+        if (spriteId is null)
+        {
+            return;
+        }
+        var followers = _document.GetFollowers().Select(follower => follower.SpriteId).ToList();
+        followers[selected.FollowerIndex] = spriteId.Value;
+        RunUiAction(() =>
+        {
+            _document.SetFollowers(followers);
+            RefreshFollowers();
+            _followerList.SelectedIndex = selected.FollowerIndex;
+            UpdateDirtyState();
+        }, "无法修改随从");
+    }
+
+    private void RemoveFollower()
+    {
+        if (_document is null || _followerList.SelectedItem is not FollowerChoice selected)
+        {
+            return;
+        }
+
+        var followers = _document.GetFollowers().Select(follower => follower.SpriteId).ToList();
+        followers.RemoveAt(selected.FollowerIndex);
+        RunUiAction(() =>
+        {
+            _document.SetFollowers(followers);
+            RefreshFollowers();
+            UpdateDirtyState();
+        }, "无法移除随从");
+    }
+
+    private void MoveFollower(int direction)
+    {
+        if (_document is null || _followerList.SelectedItem is not FollowerChoice selected)
+        {
+            return;
+        }
+
+        var followers = _document.GetFollowers().Select(follower => follower.SpriteId).ToList();
+        var source = selected.FollowerIndex;
+        var target = source + direction;
+        if ((uint)target >= (uint)followers.Count)
+        {
+            return;
+        }
+        (followers[source], followers[target]) = (followers[target], followers[source]);
+        RunUiAction(() =>
+        {
+            _document.SetFollowers(followers);
+            RefreshFollowers();
+            _followerList.SelectedIndex = target;
+            UpdateDirtyState();
+        }, "无法调整随从顺序");
+    }
+
+    private ushort? PromptFollowerSprite(ushort initialValue, string title)
+    {
+        using var dialog = new Form
+        {
+            Text = title,
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            ClientSize = new(390, 165),
+            MinimizeBox = false,
+            MaximizeBox = false,
+        };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new(12), RowCount = 3, ColumnCount = 2 };
+        root.ColumnStyles.Add(new(SizeType.AutoSize));
+        root.ColumnStyles.Add(new(SizeType.Percent, 100));
+        var numeric = CreateUShortNumeric();
+        numeric.Minimum = 1;
+        numeric.Value = initialValue == 0 ? 1 : initialValue;
+        var presets = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+        presets.Items.Add(new FollowerPreset("天鬼皇", 12));
+        presets.Items.Add(new FollowerPreset("云姨", 81));
+        presets.Items.Add(new FollowerPreset("自定义（保留当前编号）", null));
+        presets.SelectedIndex = initialValue == 12 ? 0 : initialValue == 81 ? 1 : 2;
+        presets.SelectedIndexChanged += (_, _) =>
+        {
+            if (presets.SelectedItem is FollowerPreset preset && preset.SpriteId is ushort value)
+            {
+                numeric.Value = value;
+            }
+        };
+        root.Controls.Add(new Label { Text = "常用随从：", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
+        root.Controls.Add(presets, 1, 0);
+        root.Controls.Add(new Label { Text = "MGO 编号：", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 1);
+        root.Controls.Add(numeric, 1, 1);
+        var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Fill, AutoSize = true };
+        var ok = new Button { Text = "确定", DialogResult = DialogResult.OK, AutoSize = true };
+        var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, AutoSize = true };
+        buttons.Controls.Add(ok);
+        buttons.Controls.Add(cancel);
+        root.Controls.Add(buttons, 0, 2);
+        root.SetColumnSpan(buttons, 2);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = ok;
+        dialog.CancelButton = cancel;
+        return dialog.ShowDialog(this) == DialogResult.OK ? decimal.ToUInt16(numeric.Value) : null;
     }
 
     private void ApplyStrongestRole()
@@ -1002,6 +1194,23 @@ internal sealed class MainForm : Form
     private sealed record PartyChoice(int PartyIndex, ushort RoleId, string Name)
     {
         public override string ToString() => $"{PartyIndex + 1}. {Name}（角色 {RoleId}）";
+    }
+
+    private sealed record FollowerChoice(int FollowerIndex, ushort SpriteId)
+    {
+        public override string ToString() => $"{FollowerIndex + 1}. {GetFollowerName(SpriteId)}（MGO {SpriteId}）";
+
+        private static string GetFollowerName(ushort spriteId) => spriteId switch
+        {
+            12 => "天鬼皇",
+            81 => "云姨",
+            _ => "自定义随从",
+        };
+    }
+
+    private sealed record FollowerPreset(string Name, ushort? SpriteId)
+    {
+        public override string ToString() => SpriteId is ushort id ? $"{Name}（MGO {id}）" : Name;
     }
 
     private sealed record MagicChoice(MagicEntry Entry)
