@@ -4,7 +4,7 @@
 
 检查链路：
 
-1. 如果存在 `palmod/Profiles/current.json`，先校验 pointer、profile descriptor 及 descriptor 声明的 `WORD.DAT`/`SSS.MKF` 长度和 SHA-256，并使用 active profile staging 中的 `SSS.MKF`；该链损坏时失败关闭，不回退到 Classic 资源；
+1. 如果存在 `palmod/Profiles/current.json`，先校验 pointer、profile descriptor 及 descriptor 声明的 `WORD.DAT`/`SSS.MKF` 长度和 SHA-256，并使用 active profile staging 中的 `SSS.MKF`；`pal98.dream220.compat@1.0.18` 及其精确的 `.drawcard.<12位小写SHA前缀>` 派生家族还必须满足公开 `PAL98.PublicToolProfile.v1` 的名称、profile/save namespace、589 条文字/对象和 5,369 条事件合同；该链损坏时失败关闭，不回退到 Classic 资源；
 2. 没有 active profile 时，读取上层 `config.ini` 的 `[Patch] DefaultPatch`，从 `patches/<DefaultPatch>.zip`（或同名目录）读取 `SSS.MKF`；`DefaultPatch` 为空时使用游戏根目录的 `SSS.MKF`；
 3. 检查同目录严格命名的 `1.RPG` 至 `5.RPG`，先验证 Win95 固定区加当前 SSS0 事件记录区的精确总长度；
 4. 仅在版本/流程布局一致后，比较当前 profile/补丁中应稳定的对象定义字段，并验证允许随剧情推进的脚本索引仍落在当前脚本表内。

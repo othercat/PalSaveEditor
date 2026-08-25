@@ -19,6 +19,8 @@ public sealed record PalGameResourceContext(
     string? DescriptorSha256)
 {
     public bool IsActiveProfile => !string.IsNullOrWhiteSpace(ProfileId);
+    public PalPublicToolProfile? PublicToolProfile =>
+        PalPublicToolProfiles.Find(ProfileId, ProfileVersion);
 
     public string DescribeResource(string fileName)
     {
@@ -81,6 +83,12 @@ public static class PalGameResourceContextResolver
         RequireValue(descriptor, "profile_id", descriptorPath, profileId);
         RequireValue(descriptor, "profile_version", descriptorPath, profileVersion);
         string displayName = RequireString(descriptor, "display_name", descriptorPath);
+        PalPublicToolProfile? publicToolProfile = PalPublicToolProfiles.Find(profileId, profileVersion);
+        if (publicToolProfile is not null)
+        {
+            string saveNamespace = RequireString(descriptor, "save_namespace", descriptorPath);
+            publicToolProfile.ValidateDescriptor(displayName, saveNamespace);
+        }
 
         if (!descriptor.TryGetProperty("resource_set", out JsonElement resourceSet) ||
             resourceSet.ValueKind != JsonValueKind.Array)

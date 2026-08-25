@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using PalSaveChecker.Core;
+using PalSaveEditor.Core;
 
 var failures = new List<string>();
 Run("Tools parent directory", TestGameDirectoryLocator);
@@ -11,6 +12,7 @@ Run("polluted save repair without retained backup", TestPollutedSaveRepairWithou
 Run("dynamic script state boundary", TestDynamicScriptBoundary);
 Run("GBK config and Chinese patch name", TestGbkConfig);
 Run("invalid patch fails closed", TestInvalidPatchFailsClosed);
+Run("Dream 2.2 visible active profile contract", TestDream220VisibleActiveProfile);
 Run("active profile layout mismatch fails closed", TestActiveProfileLayoutMismatch);
 Run("invalid active profile does not fall back", TestInvalidActiveProfileFailsClosed);
 Run("running game repair policy", TestRunningGameRepairPolicy);
@@ -186,6 +188,31 @@ static void TestActiveProfileLayoutMismatch()
     SaveRepairReport repair = service.Repair(fixture.Root);
     Equal(true, repair.HasFailures, "incompatible save remains a reported failure");
     SequenceEqual(before, File.ReadAllBytes(incompatiblePath), "incompatible save untouched");
+}
+
+static void TestDream220VisibleActiveProfile()
+{
+    using Fixture fixture = Fixture.Create(eventObjectBytes: 171_808, resourceObjectCount: 589);
+    const string derivedProfileId = "pal98.dream220.compat.drawcard.16e143813df5";
+    PalPublicToolProfile contract = PalPublicToolProfiles.Find(derivedProfileId, "1.0.18")
+        ?? throw new InvalidOperationException("Dream DrawCard public profile family was not resolved.");
+    fixture.EnableActiveProfile(
+        contract.ProfileId,
+        contract.ProfileVersion,
+        contract.DisplayName,
+        contract.WordDatByteLength,
+        contract.ProfileId);
+    string incompatiblePath = Path.Combine(fixture.Root, "2.RPG");
+    byte[] compatible = File.ReadAllBytes(Path.Combine(fixture.Root, "1.RPG"));
+    File.WriteAllBytes(incompatiblePath, compatible.AsSpan(0, SaveFormatDetector.KnownPal98Length).ToArray());
+
+    SaveCheckReport report = new SaveCompatibilityService().Check(fixture.Root);
+    Contains(report.ReferenceDescription, "梦幻2.2显血版 + 抽卡", "Dream visible display name");
+    Contains(report.ReferenceDescription, derivedProfileId + "@1.0.18", "Dream visible profile identity");
+    Equal(SaveCheckStatus.Clean, report.Saves[0].Status, "Dream visible compatible save");
+    Equal(SaveCheckStatus.Incompatible, report.Saves[1].Status, "Dream visible rejects Classic save");
+    Contains(report.Saves[1].Error, "185,872", "Dream visible expected length");
+    Equal(false, report.Saves[1].Repairable, "Dream visible layout mismatch not repairable");
 }
 
 static void TestInvalidActiveProfileFailsClosed()
@@ -393,7 +420,8 @@ file sealed class Fixture : IDisposable
         int scriptCount = 16,
         string patchName = "fixture-patch",
         Encoding? configEncoding = null,
-        int eventObjectBytes = 64)
+        int eventObjectBytes = 64,
+        int resourceObjectCount = 600)
     {
         string root = Path.Combine(Path.GetTempPath(), $"PalSaveCheckerTests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -403,8 +431,8 @@ file sealed class Fixture : IDisposable
             $"[Patch]\r\nDefaultPatch={patchName}\r\n",
             configEncoding ?? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
-        byte[] objects = new byte[600 * 14];
-        for (int objectId = 0; objectId < 600; objectId++)
+        byte[] objects = new byte[resourceObjectCount * 14];
+        for (int objectId = 0; objectId < resourceObjectCount; objectId++)
         {
             int offset = objectId * 14;
             for (int field = 0; field < 7; field++)
@@ -438,7 +466,12 @@ file sealed class Fixture : IDisposable
         return new Fixture(root, sss);
     }
 
-    public void EnableActiveProfile(string profileId, string profileVersion, string displayName)
+    public void EnableActiveProfile(
+        string profileId,
+        string profileVersion,
+        string displayName,
+        int wordDatByteLength = 5_750,
+        string? saveNamespace = null)
     {
         string staged = Path.Combine(Root, "palmod", "Profiles", profileId, profileVersion);
         string resources = Directory.CreateDirectory(Path.Combine(staged, "resources")).FullName;
@@ -446,7 +479,7 @@ file sealed class Fixture : IDisposable
         string sssPath = Path.Combine(resources, "SSS.MKF");
         string wordPath = Path.Combine(resources, "WORD.DAT");
         File.WriteAllBytes(sssPath, _sssBytes);
-        File.WriteAllBytes(wordPath, new byte[5_750]);
+        File.WriteAllBytes(wordPath, new byte[wordDatByteLength]);
 
         string descriptor =
             "{" +
@@ -454,6 +487,7 @@ file sealed class Fixture : IDisposable
             $"\"profile_id\":\"{profileId}\"," +
             $"\"profile_version\":\"{profileVersion}\"," +
             $"\"display_name\":\"{displayName}\"," +
+            (saveNamespace is null ? string.Empty : $"\"save_namespace\":\"{saveNamespace}\",") +
             "\"resource_set\":[" +
             ResourceJson("SSS.MKF", "resources/SSS.MKF", sssPath) + "," +
             ResourceJson("WORD.DAT", "resources/WORD.DAT", wordPath) +

@@ -392,6 +392,7 @@ public sealed class SaveCompatibilityService
             PalGameResourceContext resourceContext = PalGameResourceContextResolver.Resolve(root);
             if (resourceContext.IsActiveProfile)
             {
+                PalResourceCatalog.Load(root);
                 string activeSssPath = Path.Combine(resourceContext.ResourceDirectory, "SSS.MKF");
                 reference = ReferenceData.Parse(ReadAllBytesShared(activeSssPath));
                 description = resourceContext.DescribeResource("SSS.MKF");

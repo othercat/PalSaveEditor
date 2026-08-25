@@ -137,7 +137,7 @@ internal sealed class MainForm : Form
             MessageBoxIcon.Information));
         help.DropDownItems.Add("关于", null, (_, _) => MessageBox.Show(
             this,
-            "仙剑存档编辑器\r\n支持：仙剑 98 柔情版、仙剑 DOS、梦幻 2.20 DOS 版和 PALDLL 移植版。\r\n界面信息架构参考 PalEdit，解析与写入核心重新实现。",
+            "仙剑存档编辑器\r\n支持：仙剑 98 柔情版、仙剑 DOS、梦幻 2.20 DOS 版和梦幻2.2显血版。\r\n梦幻2.2显血版：主播粉丝、孙小柔、othercat。\r\n界面信息架构参考 PalEdit，解析与写入核心重新实现。",
             "关于",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information));

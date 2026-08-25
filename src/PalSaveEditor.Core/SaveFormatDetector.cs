@@ -60,12 +60,12 @@ public static class SaveFormatDetector
                     [SaveFormat.Dream220Dos, SaveFormat.PalDos]);
             }
 
-            if (wordDatLength == 5_650 && objectRecordSize == PalSaveLayout.WinObjectRecordSize &&
+            if (wordDatLength is 5_650 or 5_890 && objectRecordSize == PalSaveLayout.WinObjectRecordSize &&
                 eventObjectBytes == 171_808)
             {
                 return new(
                     SaveFormat.Dream220Win95,
-                    "存档采用 Win95 固定区，配套对象表和事件区符合 PALDLL 梦幻 2.20 移植版。",
+                    "存档采用 Win95 固定区，配套对象表和事件区符合梦幻2.2显血版 / PALDLL Dream 2.20。",
                     false,
                     [SaveFormat.Dream220Win95, SaveFormat.PalWin95]);
             }
@@ -99,7 +99,7 @@ public static class SaveFormatDetector
                 [SaveFormat.Dream220Dos, SaveFormat.PalDos]),
             KnownDream220Win95Length => new(
                 SaveFormat.Dream220Win95,
-                "文件长度匹配已验证的 PALDLL 梦幻 2.20 移植版存档；建议同时选择游戏资料目录复核。",
+                "文件长度匹配已验证的梦幻2.2显血版 / PALDLL Dream 2.20 存档；建议同时选择游戏资料目录复核。",
                 true,
                 [SaveFormat.Dream220Win95, SaveFormat.PalWin95]),
             _ when (fileLength - PalSaveLayout.DosEventObjectOffset) % 32 == 0 => new(
@@ -109,7 +109,7 @@ public static class SaveFormatDetector
                 [SaveFormat.PalDos, SaveFormat.Dream220Dos]),
             _ when (fileLength - PalSaveLayout.WinEventObjectOffset) % 32 == 0 => new(
                 SaveFormat.PalWin95,
-                "固定前缀后为完整的 32 字节 Win95 事件记录；PALDLL 梦幻 2.20 移植版也使用此布局。",
+                "固定前缀后为完整的 32 字节 Win95 事件记录；梦幻2.2显血版也使用此布局。",
                 true,
                 [SaveFormat.PalWin95, SaveFormat.Dream220Win95]),
             _ => throw new InvalidDataException(

@@ -40,6 +40,7 @@ public static class PalSaveLayout
     public const int DosObjectRecordSize = 12;
     public const int WinObjectRecordSize = 14;
     public const int ObjectCount = 600;
+    public const int EventObjectRecordSize = 32;
     public const int DosEventObjectOffset = ObjectOffset + DosObjectRecordSize * ObjectCount;
     public const int WinEventObjectOffset = ObjectOffset + WinObjectRecordSize * ObjectCount;
 

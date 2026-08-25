@@ -86,6 +86,7 @@ public sealed class PalResourceCatalog
 
         ushort[]? flags = null;
         var recordSize = 0;
+        var objectRecordCount = 0;
         var eventObjectBytes = 0;
         var sssPath = Path.Combine(fullDirectory, "SSS.MKF");
         if (File.Exists(sssPath))
@@ -95,6 +96,7 @@ public sealed class PalResourceCatalog
             recordSize = DetectObjectRecordSize(objectChunk.Length);
             if (recordSize != 0)
             {
+                objectRecordCount = objectChunk.Length / recordSize;
                 var count = Math.Min(PalSaveLayout.ObjectCount, objectChunk.Length / recordSize);
                 flags = new ushort[count];
                 var flagsOffset = recordSize == PalSaveLayout.WinObjectRecordSize ? 12 : 10;
@@ -105,6 +107,12 @@ public sealed class PalResourceCatalog
                 }
             }
         }
+
+        resourceContext.PublicToolProfile?.ValidateResources(
+            wordBytes.Length,
+            recordSize,
+            objectRecordCount,
+            eventObjectBytes);
 
         // Original DOS resources (including Dream 2.20) use Big5, while the
         // mainland Win95 release uses GBK. The object-record width is the same

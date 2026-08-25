@@ -1,6 +1,6 @@
 # 存档格式证据与实现边界
 
-状态：`Recovered`（PAL98 固定布局）、`Corroborated`（DOS 固定布局）、`Recovered/Corroborated`（梦幻 2.20 的 DOS 原版与 PALDLL/Win95 移植布局）、`Profile-validated`（魂牵梦萦 1.67 PALDLL/Win95 布局；剧情实机待人工验收）。
+状态：`Recovered`（PAL98 固定布局）、`Corroborated`（DOS 固定布局）、`Public-profile-validated`（梦幻2.2显血版 / PALDLL Dream 2.20）、`Profile-validated`（魂牵梦萦 1.67 PALDLL/Win95 布局；剧情实机待人工验收）。
 
 ## 公共固定区
 
@@ -47,14 +47,16 @@ Header 的 `0x0006` 保存正式队员最大下标（人数减一），`0x0020` 
 
 配套 `SSS.MKF` 的 chunk 0 也恰为 171,808 字节，chunk 2 为 `589 × 12` 字节对象记录；`WORD.DAT` 为 589 个十字节 Big5 记录，末尾另有 CRLF。程序联合这些证据把它标记为“配套资源复核”，没有资源时才使用已验证长度启发式。
 
-PALDLL_DX9 的梦幻 2.20 移植补丁使用仙剑 98/Win95 存档固定区，同时保留梦幻事件数量。新补丁实测 `2.RPG` 为 185,872 字节：
+PALDLL_DX9 的梦幻2.2显血版支持包使用仙剑 98/Win95 存档固定区，同时保留梦幻事件数量。新补丁实测 `2.RPG` 为 185,872 字节：
 
 ```text
 185872 - 14064 = 171808 = 5369 × 32
 185872 - 12864 = 173008（不能被 32 整除）
 ```
 
-游戏根目录保留的是普通仙剑98资源；PALDLL 通过 `palmod/Profiles/current.json` 指向当前 staging，并把读取重定向到其 `resources`。该有效配置档中的 `SSS.MKF` chunk 0 为 171,808 字节、对象记录为 14 字节，`WORD.DAT` 为 565 个十字节记录。因此编辑器也沿这条有效配置档链读取资源。此类存档必须按 Win95 布局编辑；选择 DOS 梦幻布局应当失败关闭，而不是越界写入。
+游戏根目录保留的是普通仙剑98资源；PALDLL 通过 `palmod/Profiles/current.json` 指向当前 staging，并把读取重定向到其 `resources`。`pal98.dream220.compat@1.0.18` 的 `SSS.MKF` chunk 0 为 171,808 字节（5,369 条事件）、chunk 2 为 589 条 14 字节对象记录，`WORD.DAT` 为 589 个十字节记录。早期 PALDLL Dream 现场曾使用 565 条 `WORD.DAT`，因此通用旧版探测仍兼容 5,650 字节；公开 1.0.18 合同只接受 5,890 字节。此类存档必须按 Win95 布局编辑；选择 DOS 梦幻布局应当失败关闭，而不是越界写入。
+
+公共工具内置的 `PAL98.PublicToolProfile.v1` 只包含 profile ID/version/display name/aliases/ordered credits、存档 namespace、对象/事件数量、记录宽度和预期长度。它不包含 PALDLL Hook、固定地址、调用约定、包认证材料、原始资源或本机路径。1.0.18 基底 descriptor 名称必须是 `梦幻2.2显血版`，profile/save namespace 必须都是 `pal98.dream220.compat`；从它生成的 PalDrawCard 派生包只能使用 `pal98.dream220.compat.drawcard.<12位小写十六进制>` 作为相同的 profile/save namespace，名称必须是 `梦幻2.2显血版 + 抽卡`。任何差异都失败关闭。
 
 ## 魂牵梦萦 1.67
 
@@ -81,7 +83,7 @@ PALDLL_DX9 的梦幻 2.20 移植补丁使用仙剑 98/Win95 存档固定区，�
 | PAL98 `1.RPG` | 176,528 | `A99AD4C82641471302F12FD486A9F62B870667897AD3B59CDBB55EE7FA3139CD` |
 | PAL DOS `0.RPG` | 183,488 | `D89AA4225AAB9B4B81651597934C0325A8159E63310CAAAA4787651ECC529653` |
 | 梦幻 2.20 `1.rpg` | 184,672 | `62BD7B1513D77DBDC46F61284213DD497DE68738AFA8A2BB79AA221C1A614586` |
-| PALDLL 梦幻 2.20 `2.rpg` | 185,872 | `CB07D2D9F071C5525BDD5FF1AB986DD467C51DE2BA425B5560F5A4F3948E5A4B` |
+| 梦幻2.2显血版 / PALDLL Dream 2.20 `2.rpg` | 185,872 | `CB07D2D9F071C5525BDD5FF1AB986DD467C51DE2BA425B5560F5A4F3948E5A4B` |
 
 样本只用于本机验证，没有复制到仓库或发行包。
 

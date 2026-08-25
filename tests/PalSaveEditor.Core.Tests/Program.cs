@@ -10,6 +10,7 @@ var tests = new (string Name, Action Run)[]
     ("synthetic field round trip", TestSyntheticFieldRoundTrip),
     ("party and follower shared queue round trip", TestPartyAndFollowers),
     ("inventory compression and duplicate guard", TestInventory),
+    ("Dream 2.2 visible active profile contract", TestDream220VisibleActiveProfile),
     ("Hunqian 1.67 active profile layout guard", TestHunqianActiveProfileLayout),
     ("optional Hunqian 1.67 runtime read-only load", TestOptionalHunqianRuntime),
     ("real sample detection and resource catalogs", TestRealSamples),
@@ -273,6 +274,108 @@ static void TestHunqianActiveProfileLayout()
         Throws<InvalidDataException>(
             () => PalSaveDocument.Load(incompatiblePath, gameDirectory: directory),
             "classic save rejected under Hunqian profile");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static void TestDream220VisibleActiveProfile()
+{
+    string directory = CreateTestDirectory();
+    try
+    {
+        PalPublicToolProfile baseContract = PalPublicToolProfiles.Dream220Visible;
+        Equal("PAL98.PublicToolProfile.v1", baseContract.Schema, "public profile schema");
+        Equal("pal98.dream220.compat", baseContract.ProfileId, "Dream profile id");
+        Equal("1.0.18", baseContract.ProfileVersion, "Dream profile version");
+        Equal("梦幻2.2显血版", baseContract.DisplayName, "Dream display name");
+        Equal("主播粉丝|孙小柔|othercat", string.Join("|", baseContract.Credits.Select(credit => credit.Name)),
+            "Dream ordered credits");
+        Equal(5_369, baseContract.EventObjectRecordCount, "Dream event count");
+        Equal(185_872, baseContract.ExpectedSaveLength, "Dream save length");
+        Throws<InvalidDataException>(
+            () => baseContract.ValidateDescriptor("仙剑梦幻 2.20 兼容配置档", baseContract.ProfileId),
+            "1.0.18 legacy display name rejected");
+
+        const string derivedProfileId = "pal98.dream220.compat.drawcard.16e143813df5";
+        PalPublicToolProfile contract = PalPublicToolProfiles.Find(derivedProfileId, "1.0.18")
+            ?? throw new InvalidOperationException("Dream DrawCard public profile family was not resolved.");
+        Equal(derivedProfileId, contract.ProfileId, "Dream derived profile id");
+        Equal("梦幻2.2显血版 + 抽卡", contract.DisplayName, "Dream derived display name");
+        contract.ValidateDescriptor(contract.DisplayName, derivedProfileId);
+        True(PalPublicToolProfiles.Find(
+            "pal98.dream220.compat.drawcard.16E143813DF5", "1.0.18") is null,
+            "uppercase derived identity rejected");
+        True(PalPublicToolProfiles.Find(
+            "pal98.dream220.compat.drawcard.16e143813df", "1.0.18") is null,
+            "short derived identity rejected");
+        True(PalPublicToolProfiles.Find(derivedProfileId, "1.0.17") is null,
+            "wrong derived version rejected");
+
+        string staged = Path.Combine(directory, "palmod", "Profiles", contract.ProfileId, contract.ProfileVersion);
+        string resources = Directory.CreateDirectory(Path.Combine(staged, "resources")).FullName;
+        string manifest = Directory.CreateDirectory(Path.Combine(staged, "manifest")).FullName;
+        byte[] events = new byte[contract.EventObjectRecordCount * PalSaveLayout.EventObjectRecordSize];
+        byte[] objects = new byte[contract.ResourceObjectRecordCount * contract.ObjectRecordSize];
+        byte[] sss = BuildMkf(events, [], objects);
+        string sssPath = Path.Combine(resources, "SSS.MKF");
+        string wordPath = Path.Combine(resources, "WORD.DAT");
+        File.WriteAllBytes(sssPath, sss);
+        File.WriteAllBytes(wordPath, new byte[contract.WordDatByteLength]);
+
+        string descriptor =
+            "{" +
+            "\"schema\":\"PAL98.GameProfile.v1\"," +
+            $"\"profile_id\":\"{contract.ProfileId}\"," +
+            $"\"profile_version\":\"{contract.ProfileVersion}\"," +
+            $"\"display_name\":\"{contract.DisplayName}\"," +
+            $"\"save_namespace\":\"{contract.ProfileId}\"," +
+            "\"resource_set\":[" +
+            ProfileResourceJson("SSS.MKF", "resources/SSS.MKF", sssPath) + "," +
+            ProfileResourceJson("WORD.DAT", "resources/WORD.DAT", wordPath) +
+            "]}";
+        string descriptorPath = Path.Combine(manifest, "game-profile.json");
+        File.WriteAllText(descriptorPath, descriptor, new UTF8Encoding(false));
+        string profiles = Directory.CreateDirectory(Path.Combine(directory, "palmod", "Profiles")).FullName;
+        string pointer =
+            "{" +
+            "\"schema\":\"PAL98.EffectiveGameProfilePointer.v1\"," +
+            $"\"profile_id\":\"{contract.ProfileId}\"," +
+            $"\"profile_version\":\"{contract.ProfileVersion}\"," +
+            $"\"descriptor_sha256\":\"{HashFile(descriptorPath)}\"," +
+            $"\"staging_relative_path\":\"{contract.ProfileId}/{contract.ProfileVersion}\"" +
+            "}";
+        File.WriteAllText(Path.Combine(profiles, "current.json"), pointer, new UTF8Encoding(false));
+
+        string compatiblePath = Path.Combine(directory, "1.RPG");
+        var compatible = new byte[contract.ExpectedSaveLength];
+        FillTail(compatible, PalSaveLayout.WinEventObjectOffset);
+        File.WriteAllBytes(compatiblePath, compatible);
+        string incompatiblePath = Path.Combine(directory, "2.RPG");
+        File.WriteAllBytes(incompatiblePath, compatible.AsSpan(0, SaveFormatDetector.KnownPal98Length).ToArray());
+
+        PalSaveDocument document = PalSaveDocument.Load(compatiblePath, gameDirectory: directory);
+        Equal(SaveFormat.Dream220Win95, document.Format, "Dream visible Win95 format");
+        True(!document.Detection.IsHeuristic, "Dream visible public profile/resource proof");
+        NotNull(document.Catalog, "Dream visible catalog");
+        Equal(contract.DisplayName, document.Catalog!.ActiveProfileDisplayName!, "Dream visible active display name");
+        Equal(derivedProfileId, document.Catalog.ActiveProfileId!, "Dream visible derived active profile id");
+        Equal(589, document.Catalog.WordCount, "Dream visible word count");
+        Equal(contract.EventObjectRecordCount * PalSaveLayout.EventObjectRecordSize,
+            document.Catalog.EventObjectBytes, "Dream visible event bytes");
+
+        byte[] eventTail = document.ToArray().AsSpan(PalSaveLayout.WinEventObjectOffset).ToArray();
+        document.Cash = 220;
+        document.Save(createBackup: false);
+        PalSaveDocument roundTrip = PalSaveDocument.Load(compatiblePath, gameDirectory: directory);
+        Equal((uint)220, roundTrip.Cash, "Dream visible field round trip");
+        SequenceEqual(eventTail, roundTrip.ToArray().AsSpan(PalSaveLayout.WinEventObjectOffset),
+            "Dream visible opaque event state preserved");
+        Throws<InvalidDataException>(
+            () => PalSaveDocument.Load(incompatiblePath, gameDirectory: directory),
+            "Classic save rejected under Dream visible profile");
     }
     finally
     {
