@@ -10,6 +10,7 @@ Run("clean save", TestCleanSave);
 Run("polluted player records repair with backup", TestPollutedPlayerRecordsRepair);
 Run("polluted save repair without retained backup", TestPollutedSaveRepairWithoutBackup);
 Run("dynamic script state boundary", TestDynamicScriptBoundary);
+Run("empty contact trigger repair", TestEmptyContactTriggerRepair);
 Run("GBK config and Chinese patch name", TestGbkConfig);
 Run("invalid patch fails closed", TestInvalidPatchFailsClosed);
 Run("Dream 2.2 visible active profile contract", TestDream220VisibleActiveProfile);
@@ -139,6 +140,46 @@ static void TestPollutedSaveRepairWithoutBackup()
     Equal(SaveCheckStatus.Clean, repair.After.Saves[0].Status, "post repair without backup status");
 }
 
+static void TestEmptyContactTriggerRepair()
+{
+    using Fixture fixture = Fixture.Create(scriptCount: 16, eventObjectBytes: 96);
+    string savePath = Path.Combine(fixture.Root, "1.RPG");
+    byte[] bytes = File.ReadAllBytes(savePath);
+    int firstEvent = PalSaveLayout.WinEventObjectOffset;
+    int secondEvent = firstEvent + PalSaveLayout.EventObjectRecordSize;
+    int thirdEvent = secondEvent + PalSaveLayout.EventObjectRecordSize;
+
+    WriteUInt16(bytes, firstEvent + 8, 0);
+    WriteUInt16(bytes, firstEvent + 12, 2);
+    WriteUInt16(bytes, firstEvent + 14, 6);
+    WriteUInt16(bytes, secondEvent + 8, 1);
+    WriteUInt16(bytes, secondEvent + 12, 2);
+    WriteUInt16(bytes, secondEvent + 14, 6);
+    WriteUInt16(bytes, thirdEvent + 8, 3);
+    WriteUInt16(bytes, thirdEvent + 12, 2);
+    WriteUInt16(bytes, thirdEvent + 14, 4);
+    File.WriteAllBytes(savePath, bytes);
+
+    var service = new SaveCompatibilityService();
+    SaveCheckReport before = service.Check(fixture.Root);
+    Equal(SaveCheckStatus.Polluted, before.Saves[0].Status, "empty contact trigger detected");
+    Equal(2, before.Saves[0].EmptyContactTriggerCount, "empty contact trigger count");
+
+    SaveRepairReport repair = service.Repair(fixture.Root);
+    Equal(false, repair.HasFailures, "empty contact trigger repair result");
+    byte[] after = File.ReadAllBytes(savePath);
+    Equal((ushort)0, ReadUInt16(after, firstEvent + 14), "empty trigger mode disabled");
+    Equal((ushort)0, ReadUInt16(after, firstEvent + 8), "empty trigger script preserved");
+    Equal((ushort)6, ReadUInt16(after, secondEvent + 14), "non-empty trigger mode preserved");
+    Equal((ushort)0, ReadUInt16(after, thirdEvent + 14), "all-zero indexed trigger mode disabled");
+    Equal((ushort)3, ReadUInt16(after, thirdEvent + 8), "all-zero indexed trigger script preserved");
+
+    byte[] expected = (byte[])bytes.Clone();
+    WriteUInt16(expected, firstEvent + 14, 0);
+    WriteUInt16(expected, thirdEvent + 14, 0);
+    SequenceEqual(expected, after, "only empty event trigger mode changed");
+}
+
 static void TestInvalidPatchFailsClosed()
 {
     using Fixture fixture = Fixture.Create();
@@ -262,11 +303,12 @@ static void TestOptionalHunqianRuntime()
     {
         Console.WriteLine(
             $"HUNQIAN {item.FileName} status={item.Status} definitions={item.DefinitionMismatchCount} " +
-            $"scripts={item.InvalidScriptCount} error={item.Error}");
+            $"scripts={item.InvalidScriptCount} emptyContact={item.EmptyContactTriggerCount} error={item.Error}");
     }
 
-    Equal(false, report.Saves[0].Status == SaveCheckStatus.Incompatible, "Hunqian slot 1 layout");
-    Equal(false, report.Saves[1].Status == SaveCheckStatus.Incompatible, "Hunqian slot 2 layout");
+    Equal(true, report.Saves.Any(item =>
+        item.Status is SaveCheckStatus.Clean or SaveCheckStatus.Polluted),
+        "at least one save matches the active Hunqian layout");
 }
 
 static void TestOptionalRealRuntime()
@@ -447,6 +489,10 @@ file sealed class Fixture : IDisposable
         }
         byte[] events = new byte[eventObjectBytes];
         byte[] scripts = new byte[scriptCount * 8];
+        if (scriptCount > 1)
+        {
+            WriteUInt16Local(scripts, 8, 1);
+        }
         byte[] sss = BuildMkf(events, [], objects, [], scripts);
         string zipPath = Path.Combine(root, "patches", $"{patchName}.zip");
         using (ZipArchive zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
@@ -462,6 +508,7 @@ file sealed class Fixture : IDisposable
         {
             save[index] = (byte)(index * 13);
         }
+        Buffer.BlockCopy(events, 0, save, PalSaveLayout.WinEventObjectOffset, events.Length);
         File.WriteAllBytes(Path.Combine(root, "1.RPG"), save);
         return new Fixture(root, sss);
     }

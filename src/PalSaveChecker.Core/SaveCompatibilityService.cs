@@ -20,7 +20,8 @@ public sealed record SaveCheckItem(
     int DefinitionMismatchCount,
     int InvalidScriptCount,
     string Risk,
-    string? Error = null);
+    string? Error = null,
+    int EmptyContactTriggerCount = 0);
 
 public sealed record SaveCheckReport(
     string GameRoot,
@@ -244,7 +245,7 @@ public sealed class SaveCompatibilityService
                 : "存档结构异常，自动修复可能破坏进度。";
             return new SaveCheckItem(fileName, status, false,
                 analysis.DefinitionMismatchCount, analysis.InvalidScriptCount,
-                failureRisk, analysis.Error);
+                failureRisk, analysis.Error, analysis.EmptyContactTriggerCount);
         }
         if (analysis.IsClean)
         {
@@ -252,11 +253,14 @@ public sealed class SaveCompatibilityService
                 "未发现对象定义或脚本索引污染。 ");
         }
 
-        string risk = analysis.DefinitionMismatchCount > 0
+        string risk = analysis.EmptyContactTriggerCount > 0
+            ? "发现启用中的接触触发对象指向空入口脚本；游戏可能每帧清空方向键并使玩家无法移动。"
+            : analysis.DefinitionMismatchCount > 0
             ? "对象定义已偏离当前补丁，可能导致人物、物品、敌人或中毒/受伤脚本乱跳，严重时会崩溃。"
             : "发现超出当前脚本表范围的索引，可能跳入无关剧情或触发 Error 6/9。";
         return new SaveCheckItem(fileName, SaveCheckStatus.Polluted, true,
-            analysis.DefinitionMismatchCount, analysis.InvalidScriptCount, risk);
+            analysis.DefinitionMismatchCount, analysis.InvalidScriptCount, risk,
+            EmptyContactTriggerCount: analysis.EmptyContactTriggerCount);
     }
 
     private static Analysis Analyze(byte[] saveBytes, ReferenceData reference)
@@ -287,6 +291,7 @@ public sealed class SaveCompatibilityService
         }
 
         var fieldRepairs = new HashSet<(int ObjectId, int Field)>();
+        var eventTriggerModeRepairs = new HashSet<int>();
         int definitions = 0;
         int scripts = 0;
 
@@ -344,7 +349,31 @@ public sealed class SaveCompatibilityService
             }
         }
 
-        return new Analysis(definitions, scripts, fieldRepairs, null);
+        int eventRecordCount = reference.EventObjectBytes / EventRecordSize;
+        for (int eventIndex = 0; eventIndex < eventRecordCount; eventIndex++)
+        {
+            int eventOffset = SaveEventObjectOffset + eventIndex * EventRecordSize;
+            short state = unchecked((short)ReadUInt16(saveBytes, eventOffset + 12));
+            ushort triggerMode = ReadUInt16(saveBytes, eventOffset + 14);
+            if (state <= 0 || triggerMode is < 4 or > 8)
+            {
+                continue;
+            }
+
+            ushort triggerScript = ReadUInt16(saveBytes, eventOffset + 8);
+            if (reference.IsEmptyTriggerScript(triggerScript))
+            {
+                eventTriggerModeRepairs.Add(eventIndex);
+            }
+        }
+
+        return new Analysis(
+            definitions,
+            scripts,
+            eventTriggerModeRepairs.Count,
+            fieldRepairs,
+            eventTriggerModeRepairs,
+            null);
     }
 
     private static byte[] RepairBytes(byte[] original, ReferenceData reference, Analysis analysis)
@@ -356,6 +385,12 @@ public sealed class SaveCompatibilityService
             int target = SaveObjectTableOffset + objectId * ObjectRecordSize + field * 2;
             repaired[target] = reference.ObjectBytes[source];
             repaired[target + 1] = reference.ObjectBytes[source + 1];
+        }
+        foreach (int eventIndex in analysis.EventTriggerModeRepairs)
+        {
+            int target = SaveEventObjectOffset + eventIndex * EventRecordSize + 14;
+            repaired[target] = 0;
+            repaired[target + 1] = 0;
         }
         return repaired;
     }
@@ -637,23 +672,49 @@ public sealed class SaveCompatibilityService
     private sealed record Analysis(
         int DefinitionMismatchCount,
         int InvalidScriptCount,
+        int EmptyContactTriggerCount,
         HashSet<(int ObjectId, int Field)> FieldRepairs,
+        HashSet<int> EventTriggerModeRepairs,
         string? Error,
         bool IsLayoutMismatch = false)
     {
         public bool Repairable => Error is null;
-        public bool IsClean => Repairable && DefinitionMismatchCount == 0 && InvalidScriptCount == 0;
+        public bool IsClean => Repairable && DefinitionMismatchCount == 0 && InvalidScriptCount == 0 &&
+                               EmptyContactTriggerCount == 0;
 
         public static Analysis Unrepairable(string error, bool isLayoutMismatch = false) =>
-            new(0, 0, [], error, isLayoutMismatch);
+            new(0, 0, 0, [], [], error, isLayoutMismatch);
     }
 
     private sealed record ReferenceData(
         byte[] ObjectBytes,
         int ObjectCount,
+        byte[] ScriptBytes,
         int ScriptCount,
         int EventObjectBytes)
     {
+        public bool IsEmptyTriggerScript(ushort scriptEntry)
+        {
+            if (scriptEntry == 0)
+            {
+                return true;
+            }
+            if (scriptEntry >= ScriptCount)
+            {
+                return false;
+            }
+
+            int offset = scriptEntry * ScriptRecordSize;
+            for (int index = 0; index < ScriptRecordSize; index++)
+            {
+                if (ScriptBytes[offset + index] != 0)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         public static ReferenceData Parse(byte[] bytes)
         {
             if (bytes.Length < 24)
@@ -691,8 +752,12 @@ public sealed class SaveCompatibilityService
             {
                 throw new InvalidDataException($"SSS.MKF 对象数 {objectCount} 超出存档容量。 ");
             }
-            return new ReferenceData(bytes.AsSpan(objectStart, objectLength).ToArray(),
-                objectCount, scriptLength / ScriptRecordSize, eventLength);
+            return new ReferenceData(
+                bytes.AsSpan(objectStart, objectLength).ToArray(),
+                objectCount,
+                bytes.AsSpan(scriptStart, scriptLength).ToArray(),
+                scriptLength / ScriptRecordSize,
+                eventLength);
         }
 
         private static (int Start, int End) ReadChunkBounds(byte[] bytes, int chunkCount, int index)

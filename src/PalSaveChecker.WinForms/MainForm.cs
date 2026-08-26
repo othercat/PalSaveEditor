@@ -208,10 +208,12 @@ internal sealed class MainForm : Form
                 _ => item.Status.ToString(),
             };
             text.Append('[').Append(label).Append("] ").Append(item.FileName).Append("：").AppendLine(item.Risk);
-            if (item.DefinitionMismatchCount > 0 || item.InvalidScriptCount > 0)
+            if (item.DefinitionMismatchCount > 0 || item.InvalidScriptCount > 0 ||
+                item.EmptyContactTriggerCount > 0)
             {
                 text.Append("        异常字段：定义 ").Append(item.DefinitionMismatchCount)
-                    .Append("，脚本索引 ").AppendLine(item.InvalidScriptCount.ToString());
+                    .Append("，脚本索引 ").Append(item.InvalidScriptCount)
+                    .Append("，空入口接触触发 ").AppendLine(item.EmptyContactTriggerCount.ToString());
             }
             if (!string.IsNullOrWhiteSpace(item.Error))
             {
@@ -220,7 +222,7 @@ internal sealed class MainForm : Form
         }
 
         text.AppendLine();
-        text.AppendLine("说明：先核对 active profile/补丁对应的存档总长度和事件记录数，再比较应稳定的对象定义，并验证会随剧情推进的脚本索引是否仍在有效范围内。工具不会用初始 SSS 事件表猜测或重建已经推进的剧情状态。 ");
+        text.AppendLine("说明：先核对 active profile/补丁对应的存档总长度和事件记录数，再比较应稳定的对象定义、验证会随剧情推进的脚本索引，并检查启用中的接触触发对象是否指向空入口。修复空入口时只把该事件对象的触发方式置 0，不用初始 SSS 事件表覆盖剧情状态。 ");
         return text.ToString();
     }
 }
