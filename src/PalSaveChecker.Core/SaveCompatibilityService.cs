@@ -21,7 +21,9 @@ public sealed record SaveCheckItem(
     int InvalidScriptCount,
     string Risk,
     string? Error = null,
-    int EmptyContactTriggerCount = 0);
+    int EmptyContactTriggerCount = 0,
+    bool ExtendedMagicSidecarIssue = false,
+    string? ExtendedMagicSidecarError = null);
 
 public sealed record SaveCheckReport(
     string GameRoot,
@@ -114,6 +116,10 @@ public sealed class SaveCompatibilityService
             try
             {
                 byte[] original = ReadAllBytesShared(savePath);
+                string sidecarPath = ExtendedRoleMagicSidecar.GetPath(savePath);
+                bool sidecarExists = File.Exists(sidecarPath);
+                ExtendedRoleMagicSidecar.TryLoadRecoverable(
+                    savePath, original, out var extendedMagics, out _);
                 Analysis analysis = Analyze(original, reference!);
                 if (!analysis.Repairable)
                 {
@@ -122,6 +128,10 @@ public sealed class SaveCompatibilityService
                 }
 
                 byte[] repaired = RepairBytes(original, reference!, analysis);
+                if (sidecarExists)
+                {
+                    extendedMagics.ProjectActivePage(repaired);
+                }
                 Analysis verification = Analyze(repaired, reference!);
                 if (!verification.IsClean)
                 {
@@ -130,12 +140,29 @@ public sealed class SaveCompatibilityService
                 }
 
                 string rollbackPath = ReplaceWithRollback(savePath, repaired, keepBackup);
+                string? sidecarRollbackPath = null;
                 try
                 {
-                    Analysis diskVerification = Analyze(ReadAllBytesShared(savePath), reference!);
-                    if (!diskVerification.IsClean)
+                    if (sidecarExists)
+                    {
+                        sidecarRollbackPath = keepBackup
+                            ? rollbackPath + ExtendedRoleMagicState.Suffix
+                            : sidecarPath + $".{Guid.NewGuid():N}.rollback";
+                        File.Copy(sidecarPath, sidecarRollbackPath, overwrite: false);
+                        ExtendedRoleMagicSidecar.WriteAtomically(
+                            savePath, repaired, extendedMagics);
+                    }
+
+                    byte[] diskBytes = ReadAllBytesShared(savePath);
+                    Analysis diskVerification = Analyze(diskBytes, reference!);
+                    bool sidecarVerified = !sidecarExists ||
+                        ExtendedRoleMagicSidecar.TryLoad(
+                            savePath, diskBytes, out _, out _);
+                    if (!diskVerification.IsClean || !sidecarVerified)
                     {
                         RestoreRollback(rollbackPath, savePath, keepBackup);
+                        RestoreSidecarRollback(
+                            sidecarRollbackPath, sidecarPath, keepBackup);
                         results.Add(new SaveRepairItem(
                             item.FileName,
                             false,
@@ -147,12 +174,22 @@ public sealed class SaveCompatibilityService
                     if (!keepBackup)
                     {
                         File.Delete(rollbackPath);
+                        if (sidecarRollbackPath is not null)
+                        {
+                            File.Delete(sidecarRollbackPath);
+                        }
                     }
 
+                    string sidecarMessage = item.ExtendedMagicSidecarIssue
+                        ? "；扩展法术槽 sidecar 已重新绑定，无法解析的额外槽会回退为 RPG 原生 32 槽"
+                        : sidecarExists
+                            ? "；扩展法术槽 sidecar 已保留并重新绑定"
+                            : string.Empty;
                     results.Add(new SaveRepairItem(
                         item.FileName,
                         true,
-                        keepBackup ? "修复完成并已创建备份。" : "修复完成；未保留备份。",
+                        (keepBackup ? "修复完成并已创建备份" : "修复完成；未保留备份") +
+                        sidecarMessage + "。",
                         keepBackup ? rollbackPath : null));
                 }
                 catch
@@ -161,6 +198,8 @@ public sealed class SaveCompatibilityService
                     {
                         RestoreRollback(rollbackPath, savePath, keepBackup);
                     }
+                    RestoreSidecarRollback(
+                        sidecarRollbackPath, sidecarPath, keepBackup);
                     throw;
                 }
             }
@@ -206,7 +245,15 @@ public sealed class SaveCompatibilityService
 
             try
             {
-                saves.Add(ToCheckItem(fileName, Analyze(ReadAllBytesShared(path), reference)));
+                byte[] bytes = ReadAllBytesShared(path);
+                string? sidecarIssue = null;
+                if (File.Exists(ExtendedRoleMagicSidecar.GetPath(path)) &&
+                    !ExtendedRoleMagicSidecar.TryLoad(
+                        path, bytes, out _, out sidecarIssue))
+                {
+                    sidecarIssue ??= "扩展法术槽 sidecar 无效。";
+                }
+                saves.Add(ToCheckItem(fileName, Analyze(bytes, reference), sidecarIssue));
             }
             catch (Exception ex)
             {
@@ -233,7 +280,10 @@ public sealed class SaveCompatibilityService
         return saves;
     }
 
-    private static SaveCheckItem ToCheckItem(string fileName, Analysis analysis)
+    private static SaveCheckItem ToCheckItem(
+        string fileName,
+        Analysis analysis,
+        string? extendedMagicSidecarIssue = null)
     {
         if (!analysis.Repairable)
         {
@@ -247,20 +297,24 @@ public sealed class SaveCompatibilityService
                 analysis.DefinitionMismatchCount, analysis.InvalidScriptCount,
                 failureRisk, analysis.Error, analysis.EmptyContactTriggerCount);
         }
-        if (analysis.IsClean)
+        if (analysis.IsClean && extendedMagicSidecarIssue is null)
         {
             return new SaveCheckItem(fileName, SaveCheckStatus.Clean, false, 0, 0,
                 "未发现对象定义或脚本索引污染。 ");
         }
 
-        string risk = analysis.EmptyContactTriggerCount > 0
+        string risk = extendedMagicSidecarIssue is not null
+            ? "扩展法术槽 sidecar 与 RPG 不匹配或结构损坏；游戏会拒绝额外槽并退回原生 32 槽。"
+            : analysis.EmptyContactTriggerCount > 0
             ? "发现启用中的接触触发对象指向空入口脚本；游戏可能每帧清空方向键并使玩家无法移动。"
             : analysis.DefinitionMismatchCount > 0
             ? "对象定义已偏离当前补丁，可能导致人物、物品、敌人或中毒/受伤脚本乱跳，严重时会崩溃。"
             : "发现超出当前脚本表范围的索引，可能跳入无关剧情或触发 Error 6/9。";
         return new SaveCheckItem(fileName, SaveCheckStatus.Polluted, true,
             analysis.DefinitionMismatchCount, analysis.InvalidScriptCount, risk,
-            EmptyContactTriggerCount: analysis.EmptyContactTriggerCount);
+            EmptyContactTriggerCount: analysis.EmptyContactTriggerCount,
+            ExtendedMagicSidecarIssue: extendedMagicSidecarIssue is not null,
+            ExtendedMagicSidecarError: extendedMagicSidecarIssue);
     }
 
     private static Analysis Analyze(byte[] saveBytes, ReferenceData reference)
@@ -632,6 +686,22 @@ public sealed class SaveCompatibilityService
     private static void RestoreRollback(string rollbackPath, string savePath, bool keepBackup)
     {
         File.Copy(rollbackPath, savePath, overwrite: true);
+        if (!keepBackup)
+        {
+            File.Delete(rollbackPath);
+        }
+    }
+
+    private static void RestoreSidecarRollback(
+        string? rollbackPath,
+        string sidecarPath,
+        bool keepBackup)
+    {
+        if (rollbackPath is null || !File.Exists(rollbackPath))
+        {
+            return;
+        }
+        File.Copy(rollbackPath, sidecarPath, overwrite: true);
         if (!keepBackup)
         {
             File.Delete(rollbackPath);

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
 using PalSaveEditor.Core;
 
 var tests = new (string Name, Action Run)[]
@@ -10,6 +11,10 @@ var tests = new (string Name, Action Run)[]
     ("synthetic field round trip", TestSyntheticFieldRoundTrip),
     ("party and follower shared queue round trip", TestPartyAndFollowers),
     ("inventory compression and duplicate guard", TestInventory),
+    ("999-slot magic sidecar round trip and binding guard", TestExtendedMagicSidecar),
+    ("independent skill registry exposes all active-resource skills", TestSkillRegistry),
+    ("active content catalog exposes composed extended skills", TestComposedContentCatalog),
+    ("optional real composed skill profile catalog", TestOptionalComposedSkillProfile),
     ("Dream 2.2 visible active profile contract", TestDream220VisibleActiveProfile),
     ("Hunqian 1.67 active profile layout guard", TestHunqianActiveProfileLayout),
     ("optional Hunqian 1.67 runtime read-only load", TestOptionalHunqianRuntime),
@@ -139,6 +144,59 @@ static void TestKnownFormatDetection()
     }
 }
 
+static void TestExtendedMagicSidecar()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var path = Path.Combine(directory, "1.RPG");
+        File.WriteAllBytes(path, new byte[SaveFormatDetector.KnownPal98Length]);
+
+        var document = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        Equal(999, document.MagicCapacity, "extended per-role capacity");
+        for (ushort magic = 100; magic < 140; magic++)
+        {
+            document.AddMagic(0, magic);
+        }
+        document.AddMagic(5, 500);
+        Equal(40, document.GetMagics(0).Count, "role zero keeps more than 32 magics");
+        Equal((ushort)500, document.GetMagics(5).Single().MagicId, "sixth role participates");
+        document.Save(createBackup: false);
+
+        var sidecarPath = ExtendedRoleMagicSidecar.GetPath(path);
+        True(File.Exists(sidecarPath), "numbered save writes extended magic sidecar");
+        var reloaded = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        True(reloaded.HasExtendedMagicSidecar, "valid sidecar is loaded");
+        Equal(40, reloaded.GetMagics(0).Count, "all extended magics survive reload");
+        Equal((ushort)139, reloaded.GetMagics(0).Last().MagicId, "slot 40 survives reload");
+        Equal((ushort)500, reloaded.GetMagics(5).Single().MagicId, "sixth-role magic survives reload");
+
+        var sparseSidecar = JsonNode.Parse(File.ReadAllText(sidecarPath))!.AsObject();
+        sparseSidecar["roles"]!.AsArray()[0]!.AsArray()[0] = 0;
+        File.WriteAllText(sidecarPath, sparseSidecar.ToJsonString());
+        var sparse = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        True(sparse.HasExtendedMagicSidecar, "sparse runtime sidecar remains valid");
+        Equal(39, sparse.GetMagics(0).Count, "sparse sidecar exposes one hole");
+        sparse.AddMagic(0, 105);
+        Equal(39, sparse.GetMagics(0).Count,
+            "adding an existing magic after an earlier hole is a no-op");
+        Equal(1, sparse.GetMagics(0).Count(magic => magic.MagicId == 105),
+            "sparse sidecar cannot create a same-source duplicate");
+
+        var tampered = File.ReadAllBytes(path);
+        tampered[PalSaveLayout.CashOffset] ^= 1;
+        File.WriteAllBytes(path, tampered);
+        var guarded = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        True(!guarded.HasExtendedMagicSidecar, "RPG hash mismatch rejects stale sidecar");
+        True(!string.IsNullOrWhiteSpace(guarded.ExtendedMagicSidecarWarning), "rejection is visible");
+        Equal(32, guarded.GetMagics(0).Count, "invalid sidecar falls back to physical page zero");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
 static void TestSyntheticFieldRoundTrip()
 {
     var directory = CreateTestDirectory();
@@ -200,6 +258,351 @@ static void TestInventory()
     {
         Directory.Delete(directory, recursive: true);
     }
+}
+
+static void TestSkillRegistry()
+{
+    string directory = CreateTestDirectory();
+    try
+    {
+        byte[] objects = new byte[565 * PalSaveLayout.WinObjectRecordSize];
+        byte[] sss = BuildMkf([], [], objects);
+        string sssPath = Path.Combine(directory, "SSS.MKF");
+        string dataPath = Path.Combine(directory, "DATA.MKF");
+        string wordPath = Path.Combine(directory, "WORD.DAT");
+        File.WriteAllBytes(sssPath, sss);
+        File.WriteAllBytes(dataPath, [1, 2, 3, 4]);
+        File.WriteAllBytes(wordPath, new byte[5_650]);
+
+        string registryDirectory = Directory.CreateDirectory(
+            Path.Combine(directory, "palmod")).FullName;
+        string registryPath = Path.Combine(
+            registryDirectory,
+            "PAL98_SKILL_REGISTRY.v1.json");
+        string registry =
+            "{" +
+            "\"schema\":\"PAL98.SkillRegistry.v1\"," +
+            "\"registry_id\":\"pal98.skill-registry\"," +
+            "\"registry_version\":\"0.4.0\"," +
+            "\"source_sets\":[{" +
+            "\"source_set_id\":\"skill-source.pal98-classic\"," +
+            "\"profile_ids\":[]," +
+            "\"inventory_state\":\"exact-pal98-snapshot\"," +
+            "\"resources\":[" +
+            ResourceIdentityJson("SSS.MKF", sssPath) + "," +
+            ResourceIdentityJson("DATA.MKF", dataPath) + "," +
+            ResourceIdentityJson("WORD.DAT", wordPath) + "]," +
+            "\"table_shape\":{\"object_record_size\":14,\"object_records\":565}" +
+            "}]," +
+            "\"skill_sets\":[{" +
+            "\"skill_set_id\":\"skill-set.pal98-classic.random-candidates\"," +
+            "\"display_name\":\"仙剑98原版技能（随机候选）\"," +
+            "\"source_set_ids\":[\"skill-source.pal98-classic\"]," +
+            "\"member_logical_ids\":[" +
+            "\"skill.pal98.classic.000a\"," +
+            "\"skill.pal98.classic.000b\"]," +
+            "\"selection_state\":\"composer-required\"}]," +
+            "\"skills\":[" +
+            SkillRegistryEntryJson("skill.pal98.classic.000a", "候选技能", 10, true, false) + "," +
+            SkillRegistryEntryJson("skill.pal98.classic.000b", "非候选扩展技能", 11, false, true) +
+            "]}";
+        File.WriteAllText(registryPath, registry, new UTF8Encoding(false));
+
+        // This file deliberately excludes the second skill. PalSaveEditor must
+        // not read gameplay selection when enumerating editable skills.
+        File.WriteAllText(
+            Path.Combine(registryDirectory, "random-skill-selection.v1.json"),
+            "{\"excluded_logical_ids\":[\"skill.pal98.classic.000b\"]}",
+            new UTF8Encoding(false));
+
+        PalResourceCatalog resources = PalResourceCatalog.Load(directory);
+        PalSkillRegistryResolution resolved = PalSkillRegistryCatalog
+            .Load(registryPath)
+            .Resolve(resources);
+
+        Equal("exact-resource-sha256", resolved.Evidence, "skill source evidence");
+        Equal(2, resolved.Skills.Count, "all registered skills exposed");
+        Equal((ushort)10, resolved.Skills[0].ObjectId, "first skill object id");
+        Equal((ushort)11, resolved.Skills[1].ObjectId, "excluded gameplay skill still editable");
+        True(!resolved.Skills[1].DefaultRandomCandidate, "non-default skill remains visible");
+        True(resolved.Skills[1].Deprecated, "deprecated metadata retained");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static string ResourceIdentityJson(string kind, string path) =>
+    "{" +
+    $"\"kind\":\"{kind}\"," +
+    $"\"sha256\":\"{HashFile(path)}\"" +
+    "}";
+
+static string SkillRegistryEntryJson(
+    string logicalId,
+    string displayName,
+    ushort objectId,
+    bool defaultCandidate,
+    bool deprecated) =>
+    "{" +
+    $"\"logical_id\":\"{logicalId}\"," +
+    $"\"display_name\":\"{displayName}\"," +
+    "\"owner_source_set_id\":\"skill-source.pal98-classic\"," +
+    $"\"default_random_candidate\":{defaultCandidate.ToString().ToLowerInvariant()}," +
+    $"\"deprecated\":{deprecated.ToString().ToLowerInvariant()}," +
+    "\"source_bindings\":[{" +
+    "\"source_set_id\":\"skill-source.pal98-classic\"," +
+    $"\"object_id\":{objectId}," +
+    "\"object_record_size\":14," +
+    $"\"pal98_target_object_id\":{objectId}" +
+    "}]}";
+
+static void TestComposedContentCatalog()
+{
+    string directory = CreateTestDirectory();
+    try
+    {
+        const string profileId = "pal98.classic.skill-library.hunqian167";
+        const string profileVersion = "1.0.0";
+        string staged = Path.Combine(
+            directory,
+            "palmod",
+            "Profiles",
+            profileId,
+            profileVersion);
+        string resourcesDirectory = Directory.CreateDirectory(
+            Path.Combine(staged, "resources")).FullName;
+        string profileDirectory = Directory.CreateDirectory(
+            Path.Combine(staged, "palmod", "profile")).FullName;
+        string manifestDirectory = Directory.CreateDirectory(
+            Path.Combine(staged, "manifest")).FullName;
+
+        byte[] objects = new byte[565 * PalSaveLayout.WinObjectRecordSize];
+        byte[] sss = BuildMkf([], [], objects);
+        string sssPath = Path.Combine(resourcesDirectory, "SSS.MKF");
+        string wordPath = Path.Combine(resourcesDirectory, "WORD.DAT");
+        string skillObjectsPath = Path.Combine(profileDirectory, "skill-objects.v1.bin");
+        File.WriteAllBytes(sssPath, sss);
+        File.WriteAllBytes(wordPath, new byte[5_650]);
+        File.WriteAllBytes(skillObjectsPath, BuildSkillObjectsPack(565, 157));
+
+        string contentCatalogPath = Path.Combine(profileDirectory, "content-catalog.json");
+        string contentCatalog =
+            "{" +
+            "\"schema\":\"PAL98.ContentCatalog.v1\"," +
+            "\"catalog_id\":\"pal98.skill-composition.classic-hunqian167\"," +
+            "\"catalog_version\":\"1.0.0\"," +
+            $"\"profile_id\":\"{profileId}\"," +
+            $"\"profile_version\":\"{profileVersion}\"," +
+            "\"magics\":[" +
+            ContentMagicJson(
+                "skill.pal98.classic.0127",
+                "斩龙诀1",
+                295,
+                "skill-source.pal98-classic",
+                295,
+                true,
+                false) + "," +
+            ContentMagicJson(
+                "skill.hunqian167.easy.018f",
+                "斩龙诀2",
+                708,
+                "skill-source.hunqian167.easy",
+                399,
+                false,
+                true) +
+            "]}";
+        File.WriteAllText(contentCatalogPath, contentCatalog, new UTF8Encoding(false));
+
+        string descriptor =
+            "{" +
+            "\"schema\":\"PAL98.GameProfile.v1\"," +
+            $"\"profile_id\":\"{profileId}\"," +
+            $"\"profile_version\":\"{profileVersion}\"," +
+            "\"display_name\":\"仙剑98 + 魂牵梦萦1.67技能库\"," +
+            "\"resource_set\":[" +
+            ProfileResourceJson("SSS.MKF", "resources/SSS.MKF", sssPath) + "," +
+            ProfileResourceJson("WORD.DAT", "resources/WORD.DAT", wordPath) + "," +
+            ProfileResourceJson(
+                "SKILL.OBJECTS",
+                "palmod/profile/skill-objects.v1.bin",
+                skillObjectsPath) + "," +
+            ProfileResourceJson(
+                "CONTENT.CATALOG",
+                "palmod/profile/content-catalog.json",
+                contentCatalogPath) +
+            "]}";
+        string descriptorPath = Path.Combine(manifestDirectory, "game-profile.json");
+        File.WriteAllText(descriptorPath, descriptor, new UTF8Encoding(false));
+
+        string profilesDirectory = Directory.CreateDirectory(
+            Path.Combine(directory, "palmod", "Profiles")).FullName;
+        string pointer =
+            "{" +
+            "\"schema\":\"PAL98.EffectiveGameProfilePointer.v1\"," +
+            $"\"profile_id\":\"{profileId}\"," +
+            $"\"profile_version\":\"{profileVersion}\"," +
+            $"\"descriptor_sha256\":\"{HashFile(descriptorPath)}\"," +
+            $"\"staging_relative_path\":\"{profileId}/{profileVersion}\"" +
+            "}";
+        File.WriteAllText(
+            Path.Combine(profilesDirectory, "current.json"),
+            pointer,
+            new UTF8Encoding(false));
+
+        // Deliberately exclude the extended skill from random gameplay. The
+        // save editor's content-catalog path must not read this file.
+        File.WriteAllText(
+            Path.Combine(directory, "palmod", "random-skill-selection.v1.json"),
+            "{\"excluded_logical_ids\":[\"skill.hunqian167.easy.018f\"]}",
+            new UTF8Encoding(false));
+
+        PalResourceCatalog resources = PalResourceCatalog.Load(directory);
+        Equal(PalSaveLayout.WinObjectRecordSize, resources.ObjectRecordSize,
+            "base object record width");
+        Equal(565, resources.ObjectRecordCount, "base object record count");
+        Equal(722, resources.RuntimeObjectRecordCount,
+            "PSO1 extended runtime object count");
+        Equal(565, resources.WordCount, "classic WORD remains unchanged");
+        Equal(contentCatalogPath, resources.ResourceContext.ContentCatalogPath!,
+            "descriptor-verified content catalog path");
+
+        PalSkillRegistryResolution resolved =
+            PalSkillRegistryCatalog.ResolveContentCatalog(resources);
+        Equal("active-profile-content-catalog-sha256", resolved.Evidence,
+            "content catalog evidence");
+        Equal(2, resolved.Skills.Count, "all grantable catalog skills exposed");
+        Equal("斩龙诀1", resolved.Skills[0].DisplayName,
+            "classic same-name variant keeps its numbered catalog name");
+        Equal("斩龙诀2", resolved.Skills[1].DisplayName,
+            "extended same-name variant keeps its numbered catalog name");
+        Equal((ushort)708, resolved.Skills[1].ObjectId,
+            "extended object id is not limited by classic WORD count");
+        Equal(PalSkillRegistryCatalog.ComposedHunqian167SkillSetId,
+            resolved.Skills[1].SkillSetId,
+            "Hunqian skills use the composed product pool");
+        True(!resolved.Skills[1].DefaultRandomCandidate,
+            "non-random skill remains editable");
+        True(resolved.Skills[1].Deprecated, "catalog exclusions metadata retained");
+
+        string savePath = Path.Combine(directory, "1.RPG");
+        File.WriteAllBytes(savePath, new byte[SaveFormatDetector.KnownPal98Length]);
+        PalSaveDocument document = PalSaveDocument.Load(savePath, SaveFormat.PalWin95);
+        document.AddMagic(0, resolved.Skills[1].ObjectId);
+        Equal((ushort)708, document.GetMagics(0).Single().MagicId,
+            "extended skill id round trips through the save layout");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static string ContentMagicJson(
+    string logicalId,
+    string displayName,
+    ushort targetObjectId,
+    string sourceSetId,
+    ushort sourceObjectId,
+    bool randomizable,
+    bool deprecated) =>
+    "{" +
+    $"\"logical_id\":\"{logicalId}\"," +
+    $"\"object_id\":{targetObjectId}," +
+    $"\"display_name\":\"{displayName}\"," +
+    "\"status\":\"pal98-static-verified\"," +
+    "\"learnable\":true," +
+    $"\"randomizable\":{randomizable.ToString().ToLowerInvariant()}," +
+    "\"grantable\":true," +
+    $"\"exclusions\":[{(deprecated ? "\"deprecated\"" : string.Empty)}]," +
+    "\"source_mappings\":[{" +
+    $"\"source_set_id\":\"{sourceSetId}\"," +
+    $"\"object_id\":{sourceObjectId}" +
+    "}]}";
+
+static void TestOptionalComposedSkillProfile()
+{
+    string? root = Environment.GetEnvironmentVariable(
+        "PAL98_SKILL_COMPOSITION_RUNTIME_GAME");
+    if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+    {
+        Console.WriteLine(
+            "SKIP  optional composed skill profile " +
+            "(PAL98_SKILL_COMPOSITION_RUNTIME_GAME not set)");
+        return;
+    }
+
+    PalResourceCatalog resources = PalResourceCatalog.Load(root);
+    string expectedProfileId = Environment.GetEnvironmentVariable(
+        "PAL98_SKILL_COMPOSITION_RUNTIME_PROFILE_ID") ??
+        "pal98.classic.skill-library.hunqian167";
+    string expectedProfileVersion = Environment.GetEnvironmentVariable(
+        "PAL98_SKILL_COMPOSITION_RUNTIME_PROFILE_VERSION") ?? "1.0.1";
+    int expectedBaseObjectCount = ReadEnvironmentInt(
+        "PAL98_SKILL_COMPOSITION_BASE_OBJECT_COUNT", 565);
+    int expectedRuntimeObjectCount = ReadEnvironmentInt(
+        "PAL98_SKILL_COMPOSITION_RUNTIME_OBJECT_COUNT", 722);
+    int expectedWordCount = ReadEnvironmentInt(
+        "PAL98_SKILL_COMPOSITION_WORD_COUNT", 565);
+    ushort expectedMaximumVisibleObjectId = checked((ushort)ReadEnvironmentInt(
+        "PAL98_SKILL_COMPOSITION_MAX_VISIBLE_OBJECT_ID", 708));
+    Equal(expectedProfileId, resources.ActiveProfileId!,
+        "composed profile id");
+    Equal(expectedProfileVersion, resources.ActiveProfileVersion!,
+        "composed profile version");
+    Equal(PalSaveLayout.WinObjectRecordSize, resources.ObjectRecordSize,
+        "composed profile object width");
+    Equal(expectedBaseObjectCount, resources.ObjectRecordCount,
+        "composed profile base object count");
+    Equal(expectedRuntimeObjectCount, resources.RuntimeObjectRecordCount,
+        "composed profile runtime object count");
+    Equal(expectedWordCount, resources.WordCount,
+        "composed profile base WORD count");
+
+    PalSkillRegistryResolution resolved =
+        PalSkillRegistryCatalog.ResolveContentCatalog(resources);
+    Equal(239, resolved.Skills.Count, "composed profile visible skill count");
+    Equal(95, resolved.Skills.Count(skill =>
+        skill.SkillSetId == PalSkillRegistryCatalog.ClassicSkillSetId),
+        "composed profile classic skill count");
+    Equal(144, resolved.Skills.Count(skill =>
+        skill.SkillSetId == PalSkillRegistryCatalog.ComposedHunqian167SkillSetId),
+        "composed profile Hunqian skill count");
+    Equal(expectedMaximumVisibleObjectId,
+        resolved.Skills.Max(skill => skill.ObjectId),
+        "hidden closure objects are not shown as editable skills");
+    True(resolved.Skills.All(skill =>
+            skill.ObjectId < resources.RuntimeObjectRecordCount),
+        "all composed skill object ids are backed by the extended table");
+}
+
+static int ReadEnvironmentInt(string name, int fallback)
+{
+    string? raw = Environment.GetEnvironmentVariable(name);
+    return int.TryParse(raw, out int value) ? value : fallback;
+}
+
+static byte[] BuildSkillObjectsPack(uint firstObjectId, uint recordCount)
+{
+    const int headerBytes = 20;
+    const int objectBytes = PalSaveLayout.WinObjectRecordSize;
+    const int wordBytes = 10;
+    byte[] result = new byte[checked(headerBytes + (int)recordCount * (objectBytes + wordBytes))];
+    Encoding.ASCII.GetBytes("PSO1").CopyTo(result, 0);
+    BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(4), 1);
+    BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(6), objectBytes);
+    BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(8), wordBytes);
+    BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(12), firstObjectId);
+    BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(16), recordCount);
+    int extensionCount = checked((int)recordCount);
+    for (int index = 0; index < extensionCount; index++)
+    {
+        int offset = headerBytes + index * (objectBytes + wordBytes);
+        result[offset] = 1;
+        result[offset + objectBytes] = (byte)'X';
+    }
+    return result;
 }
 
 static void TestHunqianActiveProfileLayout()

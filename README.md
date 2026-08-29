@@ -25,11 +25,12 @@
 - 读取相邻游戏目录的 `WORD.DAT` / `SSS.MKF`；PALDLL 启用内容配置档时，会先沿 `palmod/Profiles/current.json` 读取当前 staging 的 `resources`。自动处理 Win95 GBK 与 DOS/梦幻 Big5 名称。
 - 调整正式队员和顺序，并可添加、修改、移除或排序最多 2 名随从；正式队员与随从按原版结构共享 5 条队列记录。随从直接填写 MGO 形象编号，内置天鬼皇（12）和云姨（81）常用项。
 - 编辑六名角色的经验、等级、体力、真气、武术、灵力、防御、身法、吉运、抗毒、风雷水火土五系抗性、头像、战斗/地图形象、行走帧上界和合体法术；六种抗性按游戏原始有符号 16 位字段处理。
-- 添加/移除法术，更换六个装备部位。
+- 添加/移除法术，更换六个装备部位。启用相应 PALDLL 内容 profile 时，六名角色（包括盖罗娇）各支持 999 个法术槽；`1.RPG`～`5.RPG` 会把完整列表写入同名 `.pal98-ext-magics.json` sidecar，RPG 自身仍保存当前 32 槽投影。
+- active profile 的技能选择器和已学列表优先采用 `CONTENT.CATALOG` 中的独立技能名；同原名但来源/效果不同的技能显示稳定数字后缀，避免误认成遗忘后又学回同一技能。
 - 搜索、添加、修改或移除背包物品；写入后按游戏规则压紧背包槽。
 - 编辑保存次数、场景、坐标、音乐、战斗音乐、金钱和灵葫值。
 - 工具栏“保留原存档备份”默认勾选；覆盖保存时在原文件旁创建 `.bak-yyyyMMdd-HHmmss`，取消后不保留备份。
-- 独立的存档检查工具会结合当前版本的 `SSS.MKF` 识别“启用中的接触触发对象指向脚本 0 或全零脚本记录”；修复时只把该事件对象的触发方式改为 `0`，避免每帧清空方向键，并保留事件记录的其他 30 字节。
+- 独立的存档检查工具会结合当前版本的 `SSS.MKF` 识别“启用中的接触触发对象指向脚本 0 或全零脚本记录”；修复时只把该事件对象的触发方式改为 `0`，避免每帧清空方向键，并保留事件记录的其他 30 字节。它也校验扩展法术 sidecar 的 RPG 大小/SHA-256 绑定：结构完整时保留 999 槽并重新绑定，结构损坏时明确退回 RPG 可证明的原生 32 槽。
 - 同目录临时文件落盘后再替换目标并复核；取消备份时仍使用临时回滚副本，成功后删除。对象表和事件尾部逐字节保留。
 
 ## 使用
@@ -37,7 +38,7 @@
 1. 先退出游戏。
 2. 打开 `1.RPG`～`5.RPG`（DOS 安装也可能在 `save` 子目录）。
 3. 如果物品/法术只显示编号，点击“游戏资料目录”，选择包含 `WORD.DAT` 和 `SSS.MKF` 的游戏目录。
-4. 修改后点击“保存”。默认确认同目录已经出现带时间戳的备份；若主动取消“保留原存档备份”，则确认保存成功后再进游戏读档验证。
+4. 修改后点击“保存”。要保留第 33 槽及之后的法术，目标文件必须仍命名为 `1.RPG`～`5.RPG`；其他文件名只保存当前原生 32 槽并给出提示。默认确认同目录已经出现带时间戳的备份；若主动取消“保留原存档备份”，则确认保存成功后再进游戏读档验证。
 
 例如要制作“盖罗娇、血色蛇形灵儿、李逍遥，随从天鬼皇”的测试档：先在左侧把正式队员排为对应三个角色，再添加“天鬼皇（MGO 12）”；选中灵儿，将战斗形象、地图形象和行走帧上界分别设为 `5`、`512`、`3`。这些数值来自当前测试样本，其他内容包仍应按其配套资源复核。
 
@@ -47,10 +48,9 @@
 
 ## 构建与测试
 
-开发和构建需要 .NET 8 SDK（Windows）。测试程序同时覆盖 .NET 8 与 .NET Framework 4.7.2：
+开发和构建需要 .NET SDK（Windows）。产品与测试统一面向 .NET Framework 4.7.2：
 
 ```powershell
-dotnet run --project .\tests\PalSaveEditor.Core.Tests\PalSaveEditor.Core.Tests.csproj -c Release -f net8.0
 dotnet build .\PalSaveEditor.slnx -c Release
 .\tests\PalSaveEditor.Core.Tests\bin\Release\net472\PalSaveEditor.Core.Tests.exe
 ```
@@ -62,13 +62,6 @@ dotnet publish .\src\PalSaveEditor.WinForms\PalSaveEditor.WinForms.csproj `
   -c Release -f net472 -p:PlatformTarget=x86 `
   -p:DebugType=None -p:DebugSymbols=false `
   -o .\artifacts\win7-net472
-```
-
-如需开发期对照，也可运行 .NET 8 目标；该目标不是当前玩家覆盖包的发布格式：
-
-```powershell
-dotnet run --project .\src\PalSaveEditor.WinForms\PalSaveEditor.WinForms.csproj `
-  -c Release -f net8.0-windows
 ```
 
 测试程序不使用第三方测试框架，离线环境也可执行。安装了本仓库研究时使用的三类真实样本时，它还会自动运行真实格式、编码和资源边界回归；否则该部分明确显示跳过。

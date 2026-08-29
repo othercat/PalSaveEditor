@@ -90,7 +90,7 @@ internal sealed class MainForm : Form
             return;
         }
 
-        string confirmation = "将按检查结果所列 active profile/补丁的 SSS.MKF 修复受污染的对象记录。";
+        string confirmation = "将按检查结果所列 active profile/补丁的 SSS.MKF 修复受污染的对象记录，并修复已报告的扩展法术槽 sidecar。";
         confirmation += keepBackup
             ? "每个原存档都会保留带时间戳的备份。"
             : "不会保留备份；落盘复核完成前仍会使用临时回滚副本。";
@@ -219,10 +219,14 @@ internal sealed class MainForm : Form
             {
                 text.Append("        原因：").AppendLine(item.Error);
             }
+            if (!string.IsNullOrWhiteSpace(item.ExtendedMagicSidecarError))
+            {
+                text.Append("        扩展法术槽：").AppendLine(item.ExtendedMagicSidecarError);
+            }
         }
 
         text.AppendLine();
-        text.AppendLine("说明：先核对 active profile/补丁对应的存档总长度和事件记录数，再比较应稳定的对象定义、验证会随剧情推进的脚本索引，并检查启用中的接触触发对象是否指向空入口。修复空入口时只把该事件对象的触发方式置 0，不用初始 SSS 事件表覆盖剧情状态。 ");
+        text.AppendLine("说明：先核对 active profile/补丁对应的存档总长度和事件记录数，再比较应稳定的对象定义、验证会随剧情推进的脚本索引，并检查启用中的接触触发对象是否指向空入口。扩展法术槽 sidecar 会校验对应 RPG 的大小和 SHA-256；绑定失效但结构完整时保留 999 槽并重新绑定，结构损坏时只能从 RPG 恢复原生 32 槽。修复空入口时只把该事件对象的触发方式置 0，不用初始 SSS 事件表覆盖剧情状态。 ");
         return text.ToString();
     }
 }

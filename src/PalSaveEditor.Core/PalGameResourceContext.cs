@@ -16,7 +16,9 @@ public sealed record PalGameResourceContext(
     string? ProfileVersion,
     string? ProfileDisplayName,
     string? DescriptorPath,
-    string? DescriptorSha256)
+    string? DescriptorSha256,
+    string? ContentCatalogPath,
+    string? SkillObjectsPath)
 {
     public bool IsActiveProfile => !string.IsNullOrWhiteSpace(ProfileId);
     public PalPublicToolProfile? PublicToolProfile =>
@@ -51,6 +53,8 @@ public static class PalGameResourceContextResolver
             return new PalGameResourceContext(
                 requestedDirectory,
                 requestedDirectory,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -98,6 +102,14 @@ public static class PalGameResourceContextResolver
 
         string wordPath = ValidateRequiredResource(stagedDirectory, resourceSet, "WORD.DAT");
         string sssPath = ValidateRequiredResource(stagedDirectory, resourceSet, "SSS.MKF");
+        string? contentCatalogPath = ValidateOptionalResource(
+            stagedDirectory,
+            resourceSet,
+            "CONTENT.CATALOG");
+        string? skillObjectsPath = ValidateOptionalResource(
+            stagedDirectory,
+            resourceSet,
+            "SKILL.OBJECTS");
         string resourcesDirectory = Path.GetDirectoryName(wordPath)
             ?? throw new InvalidDataException("active profile WORD.DAT 没有有效父目录。");
         if (!string.Equals(resourcesDirectory, Path.GetDirectoryName(sssPath), StringComparison.OrdinalIgnoreCase))
@@ -112,10 +124,21 @@ public static class PalGameResourceContextResolver
             profileVersion,
             displayName,
             descriptorPath,
-            descriptorSha256);
+            descriptorSha256,
+            contentCatalogPath,
+            skillObjectsPath);
     }
 
     private static string ValidateRequiredResource(
+        string stagedDirectory,
+        JsonElement resourceSet,
+        string kind)
+    {
+        return ValidateOptionalResource(stagedDirectory, resourceSet, kind)
+            ?? throw new InvalidDataException($"active profile descriptor 未声明 {kind}。");
+    }
+
+    private static string? ValidateOptionalResource(
         string stagedDirectory,
         JsonElement resourceSet,
         string kind)
@@ -134,7 +157,7 @@ public static class PalGameResourceContextResolver
 
         if (match is null)
         {
-            throw new InvalidDataException($"active profile descriptor 未声明 {kind}。");
+            return null;
         }
 
         string relativePath = RequireString(match.Value, "relative_path", $"resource_set[{kind}]");

@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFrameworks>net8.0-windows;net472</TargetFrameworks>
+    <TargetFramework>net472</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
-    <PlatformTarget Condition="'$(TargetFramework)' == 'net472'">x86</PlatformTarget>
+    <PlatformTarget>x86</PlatformTarget>
     <AssemblyName>PalSaveEditor</AssemblyName>
     <RootNamespace>PalSaveEditor.WinForms</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>

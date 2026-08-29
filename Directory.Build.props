@@ -1,12 +1,12 @@
 <Project>
   <PropertyGroup>
-    <TargetFrameworks>net8.0;net472</TargetFrameworks>
+    <TargetFramework>net472</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
-    <Version>0.1.4</Version>
+    <Version>0.1.5</Version>
     <Authors>othercat</Authors>
     <PackageLicenseExpression>GPL-2.0-only</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/othercat/PalSaveEditor</RepositoryUrl>

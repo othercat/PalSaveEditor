@@ -6,6 +6,8 @@ public sealed class PalSaveDocument
 {
     private readonly byte[] _originalBytes;
     private readonly byte[] _bytes;
+    private ExtendedRoleMagicState _extendedMagics;
+    private ExtendedRoleMagicState _originalExtendedMagics;
 
     private PalSaveDocument(
         string path,
@@ -20,6 +22,10 @@ public sealed class PalSaveDocument
         Format = format;
         Detection = detection;
         Catalog = catalog;
+        HasExtendedMagicSidecar = ExtendedRoleMagicSidecar.TryLoad(
+            Path, _bytes, out _extendedMagics, out var sidecarWarning);
+        ExtendedMagicSidecarWarning = sidecarWarning;
+        _originalExtendedMagics = _extendedMagics.Clone();
     }
 
     public string Path { get; private set; }
@@ -27,7 +33,12 @@ public sealed class PalSaveDocument
     public SaveFormatDetection Detection { get; private set; }
     public PalResourceCatalog? Catalog { get; private set; }
     public int Length => _bytes.Length;
-    public bool IsDirty => !_bytes.AsSpan().SequenceEqual(_originalBytes);
+    public bool IsDirty => !_bytes.AsSpan().SequenceEqual(_originalBytes) ||
+        !_extendedMagics.ContentEquals(_originalExtendedMagics);
+    public bool HasExtendedMagicSidecar { get; private set; }
+    public string? ExtendedMagicSidecarWarning { get; private set; }
+    public int MagicCapacity => ExtendedRoleMagicState.CapacityPerRole;
+    public int ActiveMagicPage => _extendedMagics.ActivePage;
 
     public ushort SavedTimes { get => ReadUInt16(PalSaveLayout.SavedTimesOffset); set => WriteUInt16(PalSaveLayout.SavedTimesOffset, value); }
     public ushort ViewportX { get => ReadUInt16(PalSaveLayout.ViewportXOffset); set => WriteUInt16(PalSaveLayout.ViewportXOffset, value); }
@@ -334,9 +345,9 @@ public sealed class PalSaveDocument
     {
         ValidateRole(roleId);
         var result = new List<MagicEntry>();
-        for (var slot = 0; slot < PalSaveLayout.MagicCapacity; slot++)
+        for (var slot = 0; slot < ExtendedRoleMagicState.CapacityPerRole; slot++)
         {
-            var id = ReadUInt16(PalSaveLayout.MagicOffset(slot, roleId));
+            var id = _extendedMagics.Roles[roleId][slot];
             if (id != 0)
             {
                 result.Add(new(slot, id, Catalog?.GetObjectName(id) ?? $"法术 #{id}"));
@@ -354,39 +365,45 @@ public sealed class PalSaveDocument
             throw new ArgumentOutOfRangeException(nameof(magicId));
         }
 
-        for (var slot = 0; slot < PalSaveLayout.MagicCapacity; slot++)
+        // Runtime script removals deliberately preserve their physical slot,
+        // so a valid 999-slot sidecar can contain holes before an existing
+        // copy of the same magic.  Search the complete role table for the
+        // duplicate before choosing the first empty slot.
+        for (var slot = 0; slot < ExtendedRoleMagicState.CapacityPerRole; slot++)
         {
-            var offset = PalSaveLayout.MagicOffset(slot, roleId);
-            var current = ReadUInt16(offset);
-            if (current == magicId)
+            if (_extendedMagics.Roles[roleId][slot] == magicId)
             {
-                return;
-            }
-
-            if (current == 0)
-            {
-                WriteUInt16(offset, magicId);
                 return;
             }
         }
 
-        throw new InvalidOperationException("该角色的 32 个法术槽已满。");
+        for (var slot = 0; slot < ExtendedRoleMagicState.CapacityPerRole; slot++)
+        {
+            if (_extendedMagics.Roles[roleId][slot] == 0)
+            {
+                _extendedMagics.Roles[roleId][slot] = magicId;
+                _extendedMagics.ProjectActivePage(_bytes);
+                return;
+            }
+        }
+
+        throw new InvalidOperationException("该角色的 999 个法术槽已满。");
     }
 
     public void RemoveMagic(int roleId, int magicSlot)
     {
         ValidateRole(roleId);
-        if ((uint)magicSlot >= PalSaveLayout.MagicCapacity)
+        if ((uint)magicSlot >= ExtendedRoleMagicState.CapacityPerRole)
         {
             throw new ArgumentOutOfRangeException(nameof(magicSlot));
         }
 
-        var values = new List<ushort>(PalSaveLayout.MagicCapacity);
-        for (var slot = 0; slot < PalSaveLayout.MagicCapacity; slot++)
+        var values = new List<ushort>(ExtendedRoleMagicState.CapacityPerRole);
+        for (var slot = 0; slot < ExtendedRoleMagicState.CapacityPerRole; slot++)
         {
             if (slot != magicSlot)
             {
-                var value = ReadUInt16(PalSaveLayout.MagicOffset(slot, roleId));
+                var value = _extendedMagics.Roles[roleId][slot];
                 if (value != 0)
                 {
                     values.Add(value);
@@ -394,10 +411,12 @@ public sealed class PalSaveDocument
             }
         }
 
-        for (var slot = 0; slot < PalSaveLayout.MagicCapacity; slot++)
+        for (var slot = 0; slot < ExtendedRoleMagicState.CapacityPerRole; slot++)
         {
-            WriteUInt16(PalSaveLayout.MagicOffset(slot, roleId), slot < values.Count ? values[slot] : (ushort)0);
+            _extendedMagics.Roles[roleId][slot] =
+                slot < values.Count ? values[slot] : (ushort)0;
         }
+        _extendedMagics.ProjectActivePage(_bytes);
     }
 
     public IReadOnlyList<EquipmentEntry> GetEquipment(int roleId)
@@ -515,6 +534,7 @@ public sealed class PalSaveDocument
 
     public SaveWriteResult Save(string? targetPath = null, bool createBackup = true)
     {
+        _extendedMagics.ProjectActivePage(_bytes);
         var destination = System.IO.Path.GetFullPath(targetPath ?? Path);
         var directory = System.IO.Path.GetDirectoryName(destination)
             ?? throw new InvalidOperationException("无法确定目标目录。");
@@ -554,6 +574,20 @@ public sealed class PalSaveDocument
                 throw new IOException("保存后的文件与待写入数据不一致。 ");
             }
 
+            if (ExtendedRoleMagicSidecar.SupportsPath(destination))
+            {
+                ExtendedRoleMagicSidecar.WriteAtomically(
+                    destination, persisted, _extendedMagics);
+                HasExtendedMagicSidecar = true;
+                ExtendedMagicSidecarWarning = null;
+            }
+            else
+            {
+                HasExtendedMagicSidecar = false;
+                ExtendedMagicSidecarWarning =
+                    "仅 1.RPG 到 5.RPG 会保存 999 槽扩展数据；当前文件只保存原生页的 32 槽。";
+            }
+
             if (destinationExisted && !createBackup)
             {
                 File.Delete(rollbackPath!);
@@ -587,6 +621,7 @@ public sealed class PalSaveDocument
 
         Path = destination;
         Array.Copy(_bytes, _originalBytes, _bytes.Length);
+        _originalExtendedMagics = _extendedMagics.Clone();
 
         return new(destination, createBackup ? rollbackPath : null, _bytes.Length);
     }

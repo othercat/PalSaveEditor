@@ -14,6 +14,8 @@ public sealed class PalResourceCatalog
         int wordDatByteLength,
         ushort[]? objectFlags,
         int objectRecordSize,
+        int objectRecordCount,
+        int runtimeObjectRecordCount,
         int eventObjectBytes)
     {
         ResourceContext = resourceContext;
@@ -22,6 +24,8 @@ public sealed class PalResourceCatalog
         WordDatByteLength = wordDatByteLength;
         _objectFlags = objectFlags;
         ObjectRecordSize = objectRecordSize;
+        ObjectRecordCount = objectRecordCount;
+        RuntimeObjectRecordCount = runtimeObjectRecordCount;
         EventObjectBytes = eventObjectBytes;
     }
 
@@ -34,6 +38,8 @@ public sealed class PalResourceCatalog
     public int WordCount => _words.Length;
     public int WordDatByteLength { get; }
     public int ObjectRecordSize { get; }
+    public int ObjectRecordCount { get; }
+    public int RuntimeObjectRecordCount { get; }
     public int EventObjectBytes { get; }
     public bool HasObjectMetadata => _objectFlags is not null;
 
@@ -114,6 +120,12 @@ public sealed class PalResourceCatalog
             objectRecordCount,
             eventObjectBytes);
 
+        int runtimeObjectRecordCount = ResolveRuntimeObjectRecordCount(
+            resourceContext.SkillObjectsPath,
+            recordSize,
+            objectRecordCount,
+            wordPayloadLength);
+
         // Original DOS resources (including Dream 2.20) use Big5, while the
         // mainland Win95 release uses GBK. The object-record width is the same
         // edition signal used by the game data itself and avoids mojibake.
@@ -132,7 +144,15 @@ public sealed class PalResourceCatalog
             words[i] = wordEncoding.GetString(wordBytes, recordOffset, length).Trim();
         }
 
-        return new(resourceContext, words, wordBytes.Length, flags, recordSize, eventObjectBytes);
+        return new(
+            resourceContext,
+            words,
+            wordBytes.Length,
+            flags,
+            recordSize,
+            objectRecordCount,
+            runtimeObjectRecordCount,
+            eventObjectBytes);
     }
 
     public string GetWord(int id, string fallbackPrefix = "对象")
@@ -189,6 +209,7 @@ public sealed class PalResourceCatalog
     private static int DetectObjectRecordSize(int length)
     {
         const int minimumPlausibleObjectCount = 500;
+        const int maximumExtendedObjectCount = 4096;
         var winCount = length % PalSaveLayout.WinObjectRecordSize == 0
             ? length / PalSaveLayout.WinObjectRecordSize
             : 0;
@@ -196,19 +217,112 @@ public sealed class PalResourceCatalog
             ? length / PalSaveLayout.DosObjectRecordSize
             : 0;
 
-        if (winCount is >= minimumPlausibleObjectCount and <= PalSaveLayout.ObjectCount &&
-            dosCount is not (>= minimumPlausibleObjectCount and <= PalSaveLayout.ObjectCount))
+        bool winPlausible = winCount is >= minimumPlausibleObjectCount and <= maximumExtendedObjectCount;
+        bool dosPlausible = dosCount is >= minimumPlausibleObjectCount and <= maximumExtendedObjectCount;
+        if (winPlausible && !dosPlausible)
         {
             return PalSaveLayout.WinObjectRecordSize;
         }
 
-        if (dosCount is >= minimumPlausibleObjectCount and <= PalSaveLayout.ObjectCount &&
-            winCount is not (>= minimumPlausibleObjectCount and <= PalSaveLayout.ObjectCount))
+        if (dosPlausible && !winPlausible)
         {
             return PalSaveLayout.DosObjectRecordSize;
         }
 
+        // Preserve the original <=600 interpretation when the alternate
+        // division only becomes plausible because extended tables are allowed.
+        if (winPlausible && dosPlausible)
+        {
+            if (winCount <= PalSaveLayout.ObjectCount && dosCount > PalSaveLayout.ObjectCount)
+            {
+                return PalSaveLayout.WinObjectRecordSize;
+            }
+            if (dosCount <= PalSaveLayout.ObjectCount && winCount > PalSaveLayout.ObjectCount)
+            {
+                return PalSaveLayout.DosObjectRecordSize;
+            }
+        }
+
         return 0;
+    }
+
+    private static int ResolveRuntimeObjectRecordCount(
+        string? skillObjectsPath,
+        int objectRecordSize,
+        int baseObjectCount,
+        int baseWordBytes)
+    {
+        if (string.IsNullOrWhiteSpace(skillObjectsPath))
+        {
+            return baseObjectCount;
+        }
+        if (objectRecordSize != PalSaveLayout.WinObjectRecordSize ||
+            baseObjectCount is <= 0 or > PalSaveLayout.ObjectCount ||
+            baseWordBytes != baseObjectCount * 10)
+        {
+            throw new InvalidDataException(
+                "SKILL.OBJECTS 需要 1..600 条 14 字节基础对象，且 WORD.DAT 与对象数一致。 ");
+        }
+
+        byte[] pack = File.ReadAllBytes(skillObjectsPath);
+        const int headerBytes = 20;
+        const int wordRecordBytes = 10;
+        const int maximumPackBytes = 4 * 1024 * 1024;
+        const uint maximumRuntimeObjectCount = 4096;
+        int combinedRecordBytes = PalSaveLayout.WinObjectRecordSize + wordRecordBytes;
+        if (pack.Length < headerBytes || pack.Length > maximumPackBytes ||
+            pack[0] != (byte)'P' || pack[1] != (byte)'S' ||
+            pack[2] != (byte)'O' || pack[3] != (byte)'1' ||
+            BinaryPrimitives.ReadUInt16LittleEndian(pack.AsSpan(4)) != 1 ||
+            BinaryPrimitives.ReadUInt16LittleEndian(pack.AsSpan(6)) !=
+                PalSaveLayout.WinObjectRecordSize ||
+            BinaryPrimitives.ReadUInt16LittleEndian(pack.AsSpan(8)) != wordRecordBytes ||
+            BinaryPrimitives.ReadUInt16LittleEndian(pack.AsSpan(10)) != 0)
+        {
+            throw new InvalidDataException(
+                "SKILL.OBJECTS 不是 PSO1 v1（14 字节对象、10 字节字库）格式。 ");
+        }
+
+        uint firstObjectId = BinaryPrimitives.ReadUInt32LittleEndian(pack.AsSpan(12));
+        uint recordCount = BinaryPrimitives.ReadUInt32LittleEndian(pack.AsSpan(16));
+        if (firstObjectId != (uint)baseObjectCount || recordCount == 0 ||
+            firstObjectId > maximumRuntimeObjectCount ||
+            recordCount > maximumRuntimeObjectCount - firstObjectId ||
+            firstObjectId + recordCount <= (uint)PalSaveLayout.ObjectCount ||
+            pack.LongLength != headerBytes + (long)recordCount * combinedRecordBytes)
+        {
+            throw new InvalidDataException(
+                "SKILL.OBJECTS 起始对象、记录数或文件长度与基础资源不一致。 ");
+        }
+
+        int extensionCount = checked((int)recordCount);
+        for (int index = 0; index < extensionCount; index++)
+        {
+            int offset = headerBytes + index * combinedRecordBytes;
+            if (IsAllZero(pack, offset, PalSaveLayout.WinObjectRecordSize) ||
+                IsAllZero(
+                    pack,
+                    offset + PalSaveLayout.WinObjectRecordSize,
+                    wordRecordBytes))
+            {
+                throw new InvalidDataException(
+                    $"SKILL.OBJECTS 第 {index} 条对象或字库记录为空。 ");
+            }
+        }
+
+        return checked((int)(firstObjectId + recordCount));
+    }
+
+    private static bool IsAllZero(byte[] bytes, int offset, int count)
+    {
+        for (int index = 0; index < count; index++)
+        {
+            if (bytes[offset + index] != 0)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static byte[] ReadMkfChunk(string path, int chunkIndex)

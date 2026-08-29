@@ -11,6 +11,8 @@ Run("polluted player records repair with backup", TestPollutedPlayerRecordsRepai
 Run("polluted save repair without retained backup", TestPollutedSaveRepairWithoutBackup);
 Run("dynamic script state boundary", TestDynamicScriptBoundary);
 Run("empty contact trigger repair", TestEmptyContactTriggerRepair);
+Run("extended magic sidecar repair preserves recoverable slots", TestExtendedMagicSidecarRepair);
+Run("malformed extended magic sidecar falls back safely", TestMalformedExtendedMagicSidecarRepair);
 Run("GBK config and Chinese patch name", TestGbkConfig);
 Run("invalid patch fails closed", TestInvalidPatchFailsClosed);
 Run("Dream 2.2 visible active profile contract", TestDream220VisibleActiveProfile);
@@ -178,6 +180,61 @@ static void TestEmptyContactTriggerRepair()
     WriteUInt16(expected, firstEvent + 14, 0);
     WriteUInt16(expected, thirdEvent + 14, 0);
     SequenceEqual(expected, after, "only empty event trigger mode changed");
+}
+
+static void TestExtendedMagicSidecarRepair()
+{
+    using Fixture fixture = Fixture.Create();
+    string savePath = Path.Combine(fixture.Root, "1.RPG");
+    byte[] bytes = File.ReadAllBytes(savePath);
+    var state = ExtendedRoleMagicState.FromPhysicalPage0(bytes);
+    for (ushort magic = 100; magic < 140; magic++)
+    {
+        state.Roles[0][magic - 100] = magic;
+    }
+    state.Roles[5][0] = 500;
+    state.ProjectActivePage(bytes);
+    File.WriteAllBytes(savePath, bytes);
+    ExtendedRoleMagicSidecar.WriteAtomically(savePath, bytes, state);
+
+    bytes[0x1620] ^= 0x5A;
+    File.WriteAllBytes(savePath, bytes);
+
+    var service = new SaveCompatibilityService();
+    SaveCheckReport before = service.Check(fixture.Root);
+    Equal(SaveCheckStatus.Polluted, before.Saves[0].Status, "stale binding is detected");
+    Equal(true, before.Saves[0].ExtendedMagicSidecarIssue, "sidecar issue is classified");
+
+    SaveRepairReport repair = service.Repair(fixture.Root, keepBackup: false);
+    Equal(false, repair.HasFailures, "combined RPG and sidecar repair succeeds");
+    byte[] repaired = File.ReadAllBytes(savePath);
+    Equal(true, ExtendedRoleMagicSidecar.TryLoad(
+        savePath, repaired, out var restored, out _), "sidecar is strictly rebound");
+    Equal((ushort)139, restored.Roles[0][39], "recoverable slot beyond 32 is preserved");
+    Equal((ushort)500, restored.Roles[5][0], "sixth-role slot is preserved");
+}
+
+static void TestMalformedExtendedMagicSidecarRepair()
+{
+    using Fixture fixture = Fixture.Create();
+    string savePath = Path.Combine(fixture.Root, "1.RPG");
+    byte[] bytes = File.ReadAllBytes(savePath);
+    WriteUInt16(bytes, PalSaveLayout.MagicOffset(0, 0), 321);
+    File.WriteAllBytes(savePath, bytes);
+    File.WriteAllText(ExtendedRoleMagicSidecar.GetPath(savePath), "{}");
+
+    var service = new SaveCompatibilityService();
+    SaveCheckReport before = service.Check(fixture.Root);
+    Equal(SaveCheckStatus.Polluted, before.Saves[0].Status, "malformed sidecar is detected");
+    Equal(true, before.Saves[0].ExtendedMagicSidecarIssue, "malformed sidecar is repairable");
+
+    SaveRepairReport repair = service.Repair(fixture.Root, keepBackup: false);
+    Equal(false, repair.HasFailures, "malformed sidecar repair succeeds");
+    byte[] repaired = File.ReadAllBytes(savePath);
+    Equal(true, ExtendedRoleMagicSidecar.TryLoad(
+        savePath, repaired, out var restored, out _), "replacement sidecar is valid");
+    Equal((ushort)321, restored.Roles[0][0], "physical page zero is retained");
+    Equal((ushort)0, restored.Roles[0][32], "unrecoverable extra slots are cleared");
 }
 
 static void TestInvalidPatchFailsClosed()

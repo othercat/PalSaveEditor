@@ -61,6 +61,8 @@ internal sealed class MainForm : Form
     private readonly Label _resourceInfo = new() { AutoSize = true, Dock = DockStyle.Fill };
 
     private PalSaveDocument? _document;
+    private PalSkillRegistryResolution? _skillRegistryResolution;
+    private string? _skillRegistryWarning;
     private bool _loadingControls;
 
     public MainForm(string? initialPath)
@@ -469,6 +471,16 @@ internal sealed class MainForm : Form
             _resourcesButton.Enabled = true;
             _formatCombo.Enabled = true;
             RefreshAll();
+            if (!string.IsNullOrWhiteSpace(_document.ExtendedMagicSidecarWarning))
+            {
+                _status.Text = _document.ExtendedMagicSidecarWarning;
+                MessageBox.Show(
+                    this,
+                    _document.ExtendedMagicSidecarWarning,
+                    "扩展法术槽提示",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
         }, "无法打开存档");
     }
 
@@ -485,6 +497,10 @@ internal sealed class MainForm : Form
             _status.Text = result.BackupPath is null
                 ? $"已保存；未保留备份：{result.TargetPath}"
                 : $"已保存；备份：{result.BackupPath}";
+            if (!string.IsNullOrWhiteSpace(_document.ExtendedMagicSidecarWarning))
+            {
+                _status.Text += $"；{_document.ExtendedMagicSidecarWarning}";
+            }
             UpdateDirtyState();
         }, "保存失败");
     }
@@ -515,6 +531,10 @@ internal sealed class MainForm : Form
             _status.Text = result.BackupPath is null
                 ? $"已另存为；未保留备份：{result.TargetPath}"
                 : $"已另存为；备份：{result.BackupPath}";
+            if (!string.IsNullOrWhiteSpace(_document.ExtendedMagicSidecarWarning))
+            {
+                _status.Text += $"；{_document.ExtendedMagicSidecarWarning}";
+            }
             Text = $"仙剑存档编辑器 - [{Path.GetFileName(result.TargetPath)}]";
             UpdateDirtyState();
         }, "另存失败");
@@ -554,6 +574,8 @@ internal sealed class MainForm : Form
         {
             return;
         }
+
+        RefreshSkillRegistryResolution();
 
         _loadingControls = true;
         try
@@ -671,7 +693,10 @@ internal sealed class MainForm : Form
             _magicList.Items.Clear();
             foreach (var magic in _document.GetMagics(roleId))
             {
-                _magicList.Items.Add(new MagicChoice(magic));
+                string displayName = _skillRegistryResolution?.Skills
+                    .FirstOrDefault(skill => skill.ObjectId == magic.MagicId)
+                    ?.DisplayName ?? magic.DisplayName;
+                _magicList.Items.Add(new MagicChoice(magic, displayName));
             }
 
             _equipmentGrid.Rows.Clear();
@@ -747,8 +772,47 @@ internal sealed class MainForm : Form
             $"证据强度：{(_document.Detection.IsHeuristic ? "长度/边界启发式，可手动复核" : "配套资源复核")}";
         _resourceInfo.Text = _document.Catalog is null
             ? "游戏资料：未加载。物品和法术将显示为编号；可点击工具栏“游戏资料目录”。"
-            : BuildResourceInfo(_document.Catalog);
+            : BuildResourceInfo(_document.Catalog) +
+              (_skillRegistryResolution is not null
+                  ? $"  |  技能目录 v{_skillRegistryResolution.RegistryVersion}：" +
+                    $"{_skillRegistryResolution.Skills.Count} 个可写技能（不受候选池限制）"
+                  : string.IsNullOrWhiteSpace(_skillRegistryWarning)
+                      ? string.Empty
+                      : $"  |  技能注册表：{_skillRegistryWarning}");
         _status.Text = $"{_document.Format.GetDisplayName()} · {_document.Length:N0} 字节 · {Path.GetFileName(_document.Path)}";
+    }
+
+    private void RefreshSkillRegistryResolution()
+    {
+        _skillRegistryResolution = null;
+        _skillRegistryWarning = null;
+        if (_document?.Catalog is not PalResourceCatalog resources)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(resources.ResourceContext.ContentCatalogPath))
+            {
+                _skillRegistryResolution = PalSkillRegistryCatalog.ResolveContentCatalog(resources);
+                return;
+            }
+
+            string registryPath = PalSkillRegistryCatalog.ResolvePath(
+                resources.ResourceContext.GameDirectory);
+            if (!File.Exists(registryPath))
+            {
+                _skillRegistryWarning = "未找到 CONTENT.CATALOG 或 PAL98_SKILL_REGISTRY.v1.json";
+                return;
+            }
+            _skillRegistryResolution = PalSkillRegistryCatalog.Load(registryPath)
+                .Resolve(resources);
+        }
+        catch (Exception exception)
+        {
+            _skillRegistryWarning = exception.Message;
+        }
     }
 
     private static string BuildResourceInfo(PalResourceCatalog catalog)
@@ -999,12 +1063,25 @@ internal sealed class MainForm : Form
         {
             return;
         }
-        using var dialog = new ObjectPickerDialog(_document.Catalog, "添加法术");
-        if (dialog.ShowDialog(this) == DialogResult.OK)
+        ushort selectedId;
+        DialogResult result;
+        if (_skillRegistryResolution is not null)
+        {
+            using var dialog = new SkillPickerDialog(_skillRegistryResolution);
+            result = dialog.ShowDialog(this);
+            selectedId = dialog.SelectedId;
+        }
+        else
+        {
+            using var dialog = new ObjectPickerDialog(_document.Catalog, "添加法术");
+            result = dialog.ShowDialog(this);
+            selectedId = dialog.SelectedId;
+        }
+        if (result == DialogResult.OK)
         {
             RunUiAction(() =>
             {
-                _document.AddMagic(roleId, dialog.SelectedId);
+                _document.AddMagic(roleId, selectedId);
                 LoadSelectedRole();
                 UpdateDirtyState();
             });
@@ -1247,8 +1324,8 @@ internal sealed class MainForm : Form
         public override string ToString() => SpriteId is ushort id ? $"{Name}（MGO {id}）" : Name;
     }
 
-    private sealed record MagicChoice(MagicEntry Entry)
+    private sealed record MagicChoice(MagicEntry Entry, string DisplayName)
     {
-        public override string ToString() => $"{Entry.MagicId,4}  {Entry.DisplayName}";
+        public override string ToString() => $"{Entry.MagicId,4}  {DisplayName}";
     }
 }

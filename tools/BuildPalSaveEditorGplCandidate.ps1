@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$CandidateName = 'dream220-derived-0.1.4-gpl-candidate-20260825-r2',
-    [string]$RuntimeRoot = 'artifacts\v158-dream220-derived'
+    [string]$CandidateName = 'extended-role-magics-0.1.5-gpl-candidate-20260829',
+    [string]$RuntimeRoot = 'artifacts\v159-extended-role-magics'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,8 +37,8 @@ foreach ($entry in $runtimeDirectories.GetEnumerator()) {
 
 $editorExe = Join-Path $runtimeRootFull 'PalSaveEditor-win7-net472\PalSaveEditor.exe'
 $checkerExe = Join-Path $runtimeRootFull 'PalSaveChecker-win7-net472\仙剑98存档检查工具.exe'
-if ((Get-Item -LiteralPath $editorExe).VersionInfo.FileVersion -ne '0.1.4.0') {
-    throw 'PalSaveEditor.exe is not version 0.1.4.0'
+if ((Get-Item -LiteralPath $editorExe).VersionInfo.FileVersion -ne '0.1.5.0') {
+    throw 'PalSaveEditor.exe is not version 0.1.5.0'
 }
 if (-not (Test-Path -LiteralPath $checkerExe -PathType Leaf)) {
     throw "PalSaveChecker executable is missing: $checkerExe"
@@ -91,14 +91,14 @@ $metadata = @(
     'Repository: https://github.com/othercat/PalSaveEditor'
     "Source revision: $head"
     'Snapshot policy: current tracked and untracked source, excluding generated outputs, local Goal overlays, private-agent notes and signing-key file types.'
-    'Build targets: net8.0 and Windows 7 compatible net472.'
+    'Build target: Windows 7 compatible net472 only.'
 ) -join [Environment]::NewLine
 [IO.File]::WriteAllText(
     (Join-Path $sourceStage 'SOURCE_SNAPSHOT_METADATA.txt'),
     $metadata + [Environment]::NewLine,
     [Text.UTF8Encoding]::new($false))
 
-$sourceZip = Join-Path $candidateRoot 'PalSaveEditor-0.1.4-source.zip'
+$sourceZip = Join-Path $candidateRoot 'PalSaveEditor-0.1.5-source.zip'
 Compress-Archive -Path (Join-Path $sourceStage '*') -DestinationPath $sourceZip -CompressionLevel Optimal
 
 $resolvedStage = [IO.Path]::GetFullPath($sourceStage)
@@ -118,11 +118,11 @@ $payload = Get-ChildItem -LiteralPath $candidateRoot -File -Recurse | Sort-Objec
 $manifest = [ordered]@{
     schema = 'pal98.local-public-tool-release.v1'
     product = 'PalSaveEditor and PalSaveChecker'
-    version = '0.1.4'
+    version = '0.1.5'
     license = 'GPL-2.0-only'
     repository_owner = 'othercat'
     repository = 'https://github.com/othercat/PalSaveEditor'
-    build_configuration = 'Release; net8.0 and net472'
+    build_configuration = 'Release; net472 x86 only'
     source_revision = $head
     source_snapshot_includes_uncommitted_changes = $true
     payload = $payload

@@ -8,9 +8,12 @@
 2. 没有 active profile 时，读取上层 `config.ini` 的 `[Patch] DefaultPatch`，从 `patches/<DefaultPatch>.zip`（或同名目录）读取 `SSS.MKF`；`DefaultPatch` 为空时使用游戏根目录的 `SSS.MKF`；
 3. 检查同目录严格命名的 `1.RPG` 至 `5.RPG`，先验证 Win95 固定区加当前 SSS0 事件记录区的精确总长度；
 4. 仅在版本/流程布局一致后，比较当前 profile/补丁中应稳定的对象定义字段，并验证允许随剧情推进的脚本索引仍落在当前脚本表内；
-5. 扫描存档事件区：对象必须处于启用状态、触发方式为接触触发 `4..8`，且入口脚本为 `0` 或对应 `SSS4` 的 8 字节记录全零，才报告“空入口接触触发”。
+5. 扫描存档事件区：对象必须处于启用状态、触发方式为接触触发 `4..8`，且入口脚本为 `0` 或对应 `SSS4` 的 8 字节记录全零，才报告“空入口接触触发”；
+6. 如果存在 `N.RPG.pal98-ext-magics.json`，严格校验 schema、6 名角色、每人 999 槽、当前页以及 `N.RPG` 的文件名、大小和 SHA-256 绑定。
 
 修复只处理已经判定为污染的字段。玩家对象出现稳定字段污染时，恢复首末异常稳定字段之间的连续区段，并另外恢复所有越界脚本索引；这样可以修复精灵数据覆盖形成的“范围内错误脚本”，同时保留最后一条部分覆盖记录之外的正常剧情状态。物品、法术、敌人和毒对象只恢复应稳定的字段及越界脚本索引。空入口接触触发只把对应 32 字节事件记录中偏移 `+14` 的触发方式改为 `0`，入口脚本、坐标、状态及其余 30 字节保持原样。界面的“保留原存档备份”默认勾选，此时每次写入用 `File.Replace` 创建 `.bak-yyyyMMdd-HHmmss` 完整备份；取消勾选后不留下备份，但在落盘复核完成前仍使用临时回滚副本。候选结果仍不一致时不写，落盘复核失败时恢复原存档。
+
+扩展法术 sidecar 若只是 RPG 绑定过期但 JSON 结构完整，修复器会保留其中全部 999 槽、把当前页重新投影到 RPG，并用修复后 RPG 的大小和 SHA-256 重新绑定。若 sidecar 本身无法解析，则第 33 槽之后没有可证明的恢复来源，只能从 RPG 当前的 32 个物理槽生成一个干净 sidecar；界面会明确说明这一数据边界。保留备份时，原 sidecar 也会随 RPG 备份一并保留。
 
 事件区长度不一致属于“版本/流程不匹配”，不是可修复的对象字段污染。例如魂牵梦萦 1.67 PALDLL profile 要求 `184,688 = 14,064 + 5,332 × 32` 字节；原版 176,528 字节存档少 255 条事件记录。工具不会把当前 SSS 初始事件表直接附加到旧存档，因为那不能重建该存档已经推进到的剧情状态。
 
@@ -20,7 +23,8 @@
 
 ```powershell
 $env:PAL98_DREAM220_RUNTIME_GAME='D:\path\to\game'
-dotnet run --project .\tests\PalSaveChecker.Core.Tests\PalSaveChecker.Core.Tests.csproj -c Release -f net8.0
+dotnet build .\tests\PalSaveChecker.Core.Tests\PalSaveChecker.Core.Tests.csproj -c Release
+.\tests\PalSaveChecker.Core.Tests\bin\Release\net472\PalSaveChecker.Core.Tests.exe
 dotnet publish .\src\PalSaveChecker.WinForms\PalSaveChecker.WinForms.csproj `
   -c Release -f net472 -p:PlatformTarget=x86 `
   -p:DebugType=None -p:DebugSymbols=false `
