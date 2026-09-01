@@ -223,10 +223,14 @@ internal sealed class MainForm : Form
             {
                 text.Append("        扩展法术槽：").AppendLine(item.ExtendedMagicSidecarError);
             }
+            if (!string.IsNullOrWhiteSpace(item.LearnedMagicProfileError))
+            {
+                text.Append("        已学仙术：").AppendLine(item.LearnedMagicProfileError);
+            }
         }
 
         text.AppendLine();
-        text.AppendLine("说明：先核对 active profile/补丁对应的存档总长度和事件记录数，再比较应稳定的对象定义、验证会随剧情推进的脚本索引，并检查启用中的接触触发对象是否指向空入口。扩展法术槽 sidecar 会校验对应 RPG 的大小和 SHA-256；绑定失效但结构完整时保留 999 槽并重新绑定，结构损坏时只能从 RPG 恢复原生 32 槽。修复空入口时只把该事件对象的触发方式置 0，不用初始 SSS 事件表覆盖剧情状态。 ");
+        text.AppendLine("说明：先核对 active profile/补丁对应的存档总长度和事件记录数，再比较应稳定的对象定义、验证会随剧情推进的脚本索引，并检查启用中的接触触发对象是否指向空入口。已学仙术会按同一 Profile 历史 CONTENT.CATALOG 的 logical_id 迁移到当前对象号；只有已证明没有当前等价项或已经越出当前对象表的对象号才会移除，无法证明的表内对象号会保留。扩展法术槽 sidecar 仍会校验对应 RPG 的大小和 SHA-256；不含原生 32 槽之外数据的旧绑定会静默忽略，含额外槽、非零活动页或随机等级技能进度时仍会报告并保留给修复工具；结构损坏时只能从 RPG 恢复原生 32 槽。修复空入口时只把该事件对象的触发方式置 0，不用初始 SSS 事件表覆盖剧情状态。 ");
         return text.ToString();
     }
 }

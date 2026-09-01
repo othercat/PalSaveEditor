@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace PalSaveEditor.Core;
@@ -275,6 +276,12 @@ public sealed class PalSkillRegistryCatalog
             }
 
             string status = RequireString(magic, "status", logicalId);
+            string displayName = RequireString(magic, "display_name", logicalId);
+            if (!IsPal98RuntimeSkillName(displayName))
+            {
+                throw new InvalidDataException(
+                    $"{logicalId} 的技能名称不是有效的 PAL98 十字节 GBK 名称：{displayName}");
+            }
             bool supportedStatus = status is "pal98-runtime-verified" or "pal98-static-verified";
             bool learnable = RequireBoolean(magic, "learnable", logicalId);
             bool randomizable = RequireBoolean(magic, "randomizable", logicalId);
@@ -313,7 +320,7 @@ public sealed class PalSkillRegistryCatalog
                 sourceSetId);
             skills.Add(new PalRegisteredSkill(
                 logicalId,
-                RequireString(magic, "display_name", logicalId),
+                displayName,
                 skillSetId,
                 skillSetDisplayName,
                 sourceSetId,
@@ -335,6 +342,27 @@ public sealed class PalSkillRegistryCatalog
             sourceSetIds,
             skills,
             "active-profile-content-catalog-sha256");
+    }
+
+    private static bool IsPal98RuntimeSkillName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        Encoding encoding = Encoding.GetEncoding(
+            936,
+            EncoderFallback.ExceptionFallback,
+            DecoderFallback.ExceptionFallback);
+        try
+        {
+            return encoding.GetByteCount(value) <= 10;
+        }
+        catch (EncoderFallbackException)
+        {
+            return false;
+        }
     }
 
     public PalSkillRegistryResolution Resolve(PalResourceCatalog resources)

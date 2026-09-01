@@ -23,7 +23,9 @@ public sealed record SaveCheckItem(
     string? Error = null,
     int EmptyContactTriggerCount = 0,
     bool ExtendedMagicSidecarIssue = false,
-    string? ExtendedMagicSidecarError = null);
+    string? ExtendedMagicSidecarError = null,
+    bool LearnedMagicProfileIssue = false,
+    string? LearnedMagicProfileError = null);
 
 public sealed record SaveCheckReport(
     string GameRoot,
@@ -119,7 +121,25 @@ public sealed class SaveCompatibilityService
                 string sidecarPath = ExtendedRoleMagicSidecar.GetPath(savePath);
                 bool sidecarExists = File.Exists(sidecarPath);
                 ExtendedRoleMagicSidecar.TryLoadRecoverable(
-                    savePath, original, out var extendedMagics, out _);
+                    savePath, original, out var extendedMagics, out var sidecarWarning);
+                bool persistSidecar = sidecarExists &&
+                    (sidecarWarning is not null || extendedMagics.HasExtendedPayload);
+                LearnedMagicProfileMigrationResult? learnedMagicMigration = null;
+                string? inferredLearnedMagicProfileVersion = null;
+                if (reference!.Resources is not null &&
+                    reference.Resources.IsActiveProfile &&
+                    !string.IsNullOrWhiteSpace(
+                        reference.Resources.ResourceContext.ContentCatalogPath))
+                {
+                    LearnedMagicProfileMigrationCatalog catalog =
+                        LearnedMagicProfileMigration.Resolve(
+                            reference.Resources,
+                            savePath);
+                    learnedMagicMigration = LearnedMagicProfileMigration.Apply(
+                        extendedMagics, catalog);
+                    inferredLearnedMagicProfileVersion =
+                        catalog.InferredHistoricalProfileVersion;
+                }
                 Analysis analysis = Analyze(original, reference!);
                 if (!analysis.Repairable)
                 {
@@ -128,7 +148,7 @@ public sealed class SaveCompatibilityService
                 }
 
                 byte[] repaired = RepairBytes(original, reference!, analysis);
-                if (sidecarExists)
+                if (persistSidecar || learnedMagicMigration?.Changed == true)
                 {
                     extendedMagics.ProjectActivePage(repaired);
                 }
@@ -143,7 +163,7 @@ public sealed class SaveCompatibilityService
                 string? sidecarRollbackPath = null;
                 try
                 {
-                    if (sidecarExists)
+                    if (persistSidecar)
                     {
                         sidecarRollbackPath = keepBackup
                             ? rollbackPath + ExtendedRoleMagicState.Suffix
@@ -155,7 +175,7 @@ public sealed class SaveCompatibilityService
 
                     byte[] diskBytes = ReadAllBytesShared(savePath);
                     Analysis diskVerification = Analyze(diskBytes, reference!);
-                    bool sidecarVerified = !sidecarExists ||
+                    bool sidecarVerified = !persistSidecar ||
                         ExtendedRoleMagicSidecar.TryLoad(
                             savePath, diskBytes, out _, out _);
                     if (!diskVerification.IsClean || !sidecarVerified)
@@ -180,16 +200,26 @@ public sealed class SaveCompatibilityService
                         }
                     }
 
+                    string profileMagicMessage = learnedMagicMigration?.Changed == true
+                        ? $"；已按当前 Profile 迁移 {learnedMagicMigration.Migrated} 个已学仙术，移除 {learnedMagicMigration.RemovedRetired + learnedMagicMigration.RemovedOutOfRange} 个无当前等价项或越界对象号，清理 {learnedMagicMigration.RemovedDuplicates} 个重复项"
+                        : string.Empty;
+                    if (!string.IsNullOrWhiteSpace(
+                            inferredLearnedMagicProfileVersion) &&
+                        learnedMagicMigration?.Changed == true)
+                    {
+                        profileMagicMessage +=
+                            $"（根据存档修改时间与本机不可变 staging 推定来源 Profile {inferredLearnedMagicProfileVersion}）";
+                    }
                     string sidecarMessage = item.ExtendedMagicSidecarIssue
                         ? "；扩展法术槽 sidecar 已重新绑定，无法解析的额外槽会回退为 RPG 原生 32 槽"
-                        : sidecarExists
+                        : persistSidecar
                             ? "；扩展法术槽 sidecar 已保留并重新绑定"
                             : string.Empty;
                     results.Add(new SaveRepairItem(
                         item.FileName,
                         true,
                         (keepBackup ? "修复完成并已创建备份" : "修复完成；未保留备份") +
-                        sidecarMessage + "。",
+                        profileMagicMessage + sidecarMessage + "。",
                         keepBackup ? rollbackPath : null));
                 }
                 catch
@@ -247,13 +277,46 @@ public sealed class SaveCompatibilityService
             {
                 byte[] bytes = ReadAllBytesShared(path);
                 string? sidecarIssue = null;
-                if (File.Exists(ExtendedRoleMagicSidecar.GetPath(path)) &&
-                    !ExtendedRoleMagicSidecar.TryLoad(
-                        path, bytes, out _, out sidecarIssue))
+                ExtendedRoleMagicState learnedMagics =
+                    ExtendedRoleMagicState.FromPhysicalPage0(bytes);
+                if (File.Exists(ExtendedRoleMagicSidecar.GetPath(path)))
                 {
-                    sidecarIssue ??= "扩展法术槽 sidecar 无效。";
+                    _ = ExtendedRoleMagicSidecar.TryLoad(
+                        path, bytes, out learnedMagics,
+                        out sidecarIssue);
                 }
-                saves.Add(ToCheckItem(fileName, Analyze(bytes, reference), sidecarIssue));
+                string? learnedMagicIssue = null;
+                if (reference.Resources is not null &&
+                    reference.Resources.IsActiveProfile &&
+                    !string.IsNullOrWhiteSpace(
+                        reference.Resources.ResourceContext.ContentCatalogPath))
+                {
+                    LearnedMagicProfileMigrationCatalog catalog =
+                        LearnedMagicProfileMigration.Resolve(
+                            reference.Resources,
+                            path);
+                    LearnedMagicProfileMigrationResult migration =
+                        LearnedMagicProfileMigration.Apply(
+                            learnedMagics.Clone(), catalog);
+                    if (migration.Changed)
+                    {
+                        learnedMagicIssue =
+                            $"已学仙术含 {migration.Migrated} 个可迁移的旧 Profile 对象号、" +
+                            $"{migration.RemovedRetired + migration.RemovedOutOfRange} 个无当前等价项或越界对象号、" +
+                            $"{migration.RemovedDuplicates} 个迁移后重复项。";
+                        if (!string.IsNullOrWhiteSpace(
+                                catalog.InferredHistoricalProfileVersion))
+                        {
+                            learnedMagicIssue +=
+                                $" 根据存档修改时间与本机不可变 staging 推定来源 Profile {catalog.InferredHistoricalProfileVersion}。";
+                        }
+                    }
+                }
+                saves.Add(ToCheckItem(
+                    fileName,
+                    Analyze(bytes, reference),
+                    sidecarIssue,
+                    learnedMagicIssue));
             }
             catch (Exception ex)
             {
@@ -283,7 +346,8 @@ public sealed class SaveCompatibilityService
     private static SaveCheckItem ToCheckItem(
         string fileName,
         Analysis analysis,
-        string? extendedMagicSidecarIssue = null)
+        string? extendedMagicSidecarIssue = null,
+        string? learnedMagicProfileIssue = null)
     {
         if (!analysis.Repairable)
         {
@@ -295,15 +359,20 @@ public sealed class SaveCompatibilityService
                 : "存档结构异常，自动修复可能破坏进度。";
             return new SaveCheckItem(fileName, status, false,
                 analysis.DefinitionMismatchCount, analysis.InvalidScriptCount,
-                failureRisk, analysis.Error, analysis.EmptyContactTriggerCount);
+                failureRisk, analysis.Error, analysis.EmptyContactTriggerCount,
+                LearnedMagicProfileIssue: learnedMagicProfileIssue is not null,
+                LearnedMagicProfileError: learnedMagicProfileIssue);
         }
-        if (analysis.IsClean && extendedMagicSidecarIssue is null)
+        if (analysis.IsClean && extendedMagicSidecarIssue is null &&
+            learnedMagicProfileIssue is null)
         {
             return new SaveCheckItem(fileName, SaveCheckStatus.Clean, false, 0, 0,
                 "未发现对象定义或脚本索引污染。 ");
         }
 
-        string risk = extendedMagicSidecarIssue is not null
+        string risk = learnedMagicProfileIssue is not null
+            ? "已学仙术对象号来自旧 Profile 或越出当前对象表；打开仙术菜单可能触发 Error 9。"
+            : extendedMagicSidecarIssue is not null
             ? "扩展法术槽 sidecar 与 RPG 不匹配或结构损坏；游戏会拒绝额外槽并退回原生 32 槽。"
             : analysis.EmptyContactTriggerCount > 0
             ? "发现启用中的接触触发对象指向空入口脚本；游戏可能每帧清空方向键并使玩家无法移动。"
@@ -314,7 +383,9 @@ public sealed class SaveCompatibilityService
             analysis.DefinitionMismatchCount, analysis.InvalidScriptCount, risk,
             EmptyContactTriggerCount: analysis.EmptyContactTriggerCount,
             ExtendedMagicSidecarIssue: extendedMagicSidecarIssue is not null,
-            ExtendedMagicSidecarError: extendedMagicSidecarIssue);
+            ExtendedMagicSidecarError: extendedMagicSidecarIssue,
+            LearnedMagicProfileIssue: learnedMagicProfileIssue is not null,
+            LearnedMagicProfileError: learnedMagicProfileIssue);
     }
 
     private static Analysis Analyze(byte[] saveBytes, ReferenceData reference)
@@ -481,9 +552,10 @@ public sealed class SaveCompatibilityService
             PalGameResourceContext resourceContext = PalGameResourceContextResolver.Resolve(root);
             if (resourceContext.IsActiveProfile)
             {
-                PalResourceCatalog.Load(root);
+                PalResourceCatalog resources = PalResourceCatalog.Load(root);
                 string activeSssPath = Path.Combine(resourceContext.ResourceDirectory, "SSS.MKF");
-                reference = ReferenceData.Parse(ReadAllBytesShared(activeSssPath));
+                reference = ReferenceData.Parse(
+                    ReadAllBytesShared(activeSssPath), resources);
                 description = resourceContext.DescribeResource("SSS.MKF");
                 return true;
             }
@@ -761,7 +833,8 @@ public sealed class SaveCompatibilityService
         int ObjectCount,
         byte[] ScriptBytes,
         int ScriptCount,
-        int EventObjectBytes)
+        int EventObjectBytes,
+        PalResourceCatalog? Resources = null)
     {
         public bool IsEmptyTriggerScript(ushort scriptEntry)
         {
@@ -785,7 +858,9 @@ public sealed class SaveCompatibilityService
             return true;
         }
 
-        public static ReferenceData Parse(byte[] bytes)
+        public static ReferenceData Parse(
+            byte[] bytes,
+            PalResourceCatalog? resources = null)
         {
             if (bytes.Length < 24)
             {
@@ -827,7 +902,8 @@ public sealed class SaveCompatibilityService
                 objectCount,
                 bytes.AsSpan(scriptStart, scriptLength).ToArray(),
                 scriptLength / ScriptRecordSize,
-                eventLength);
+                eventLength,
+                resources);
         }
 
         private static (int Start, int End) ReadChunkBounds(byte[] bytes, int chunkCount, int index)

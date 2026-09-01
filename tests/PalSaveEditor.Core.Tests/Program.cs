@@ -12,6 +12,7 @@ var tests = new (string Name, Action Run)[]
     ("party and follower shared queue round trip", TestPartyAndFollowers),
     ("inventory compression and duplicate guard", TestInventory),
     ("999-slot magic sidecar round trip and binding guard", TestExtendedMagicSidecar),
+    ("native 32-slot stale sidecar is silent and not rewritten", TestNativeStaleSidecar),
     ("independent skill registry exposes all active-resource skills", TestSkillRegistry),
     ("active content catalog exposes composed extended skills", TestComposedContentCatalog),
     ("optional real composed skill profile catalog", TestOptionalComposedSkillProfile),
@@ -159,6 +160,19 @@ static void TestExtendedMagicSidecar()
             document.AddMagic(0, magic);
         }
         document.AddMagic(5, 500);
+        var progressState = ExtendedRoleMagicState.FromPhysicalPage0(
+            File.ReadAllBytes(path));
+        progressState.HasRandomLevelProgress = true;
+        progressState.RandomLevelAppliedThroughLevel[0] = 99;
+        progressState.RandomLevelAppliedThroughLevel[5] = 60;
+        ExtendedRoleMagicSidecar.WriteAtomically(
+            path, File.ReadAllBytes(path), progressState);
+        document = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        for (ushort magic = 100; magic < 140; magic++)
+        {
+            document.AddMagic(0, magic);
+        }
+        document.AddMagic(5, 500);
         Equal(40, document.GetMagics(0).Count, "role zero keeps more than 32 magics");
         Equal((ushort)500, document.GetMagics(5).Single().MagicId, "sixth role participates");
         document.Save(createBackup: false);
@@ -170,6 +184,15 @@ static void TestExtendedMagicSidecar()
         Equal(40, reloaded.GetMagics(0).Count, "all extended magics survive reload");
         Equal((ushort)139, reloaded.GetMagics(0).Last().MagicId, "slot 40 survives reload");
         Equal((ushort)500, reloaded.GetMagics(5).Single().MagicId, "sixth-role magic survives reload");
+        True(ExtendedRoleMagicSidecar.TryLoad(
+            path, File.ReadAllBytes(path), out var progressReloaded, out _),
+            "progress-bearing sidecar reloads");
+        True(progressReloaded.HasRandomLevelProgress,
+            "random level progress remains present after editor save");
+        Equal((ushort)99, progressReloaded.RandomLevelAppliedThroughLevel[0],
+            "role zero random level progress survives editor save");
+        Equal((ushort)60, progressReloaded.RandomLevelAppliedThroughLevel[5],
+            "sixth-role random level progress survives editor save");
 
         var sparseSidecar = JsonNode.Parse(File.ReadAllText(sidecarPath))!.AsObject();
         sparseSidecar["roles"]!.AsArray()[0]!.AsArray()[0] = 0;
@@ -190,6 +213,65 @@ static void TestExtendedMagicSidecar()
         True(!guarded.HasExtendedMagicSidecar, "RPG hash mismatch rejects stale sidecar");
         True(!string.IsNullOrWhiteSpace(guarded.ExtendedMagicSidecarWarning), "rejection is visible");
         Equal(32, guarded.GetMagics(0).Count, "invalid sidecar falls back to physical page zero");
+
+        byte[] guardedRpg = File.ReadAllBytes(path);
+        string guardedSidecarHash = HashFile(sidecarPath);
+        guarded.AddMagic(0, 777);
+        Throws<InvalidOperationException>(
+            () => guarded.Save(createBackup: false),
+            "editor refuses to overwrite a recoverable extended payload");
+        SequenceEqual(guardedRpg, File.ReadAllBytes(path),
+            "rejected save leaves RPG untouched");
+        Equal(guardedSidecarHash, HashFile(sidecarPath),
+            "rejected save leaves recoverable sidecar untouched");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static void TestNativeStaleSidecar()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var path = Path.Combine(directory, "1.RPG");
+        var bytes = new byte[SaveFormatDetector.KnownPal98Length];
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            bytes.AsSpan(PalSaveLayout.MagicOffset(0, 0)), 296);
+        File.WriteAllBytes(path, bytes);
+
+        var state = ExtendedRoleMagicState.FromPhysicalPage0(bytes);
+        True(!state.HasExtendedPayload,
+            "native page-only state is not an extended payload");
+        ExtendedRoleMagicSidecar.WriteAtomically(path, bytes, state);
+        string sidecarPath = ExtendedRoleMagicSidecar.GetPath(path);
+        string originalSidecarHash = HashFile(sidecarPath);
+
+        bytes[PalSaveLayout.CashOffset] ^= 1;
+        File.WriteAllBytes(path, bytes);
+        var document = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        True(!document.HasExtendedMagicSidecar,
+            "stale native-only sidecar is not treated as active extension data");
+        True(document.ExtendedMagicSidecarWarning is null,
+            "stale native-only sidecar is ignored silently");
+        Equal((ushort)296, document.GetMagics(0).Single().MagicId,
+            "physical native slots remain authoritative");
+
+        document.Save(createBackup: false);
+        Equal(originalSidecarHash, HashFile(sidecarPath),
+            "ordinary native save does not rewrite the stale sidecar");
+        var reloaded = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        True(reloaded.ExtendedMagicSidecarWarning is null,
+            "unchanged stale native-only sidecar remains harmless after save");
+
+        var secondPath = Path.Combine(directory, "2.RPG");
+        File.WriteAllBytes(secondPath, new byte[SaveFormatDetector.KnownPal98Length]);
+        PalSaveDocument.Load(secondPath, SaveFormat.PalWin95)
+            .Save(createBackup: false);
+        True(!File.Exists(ExtendedRoleMagicSidecar.GetPath(secondPath)),
+            "ordinary numbered native save does not create a redundant sidecar");
     }
     finally
     {
@@ -398,7 +480,7 @@ static void TestComposedContentCatalog()
             "\"magics\":[" +
             ContentMagicJson(
                 "skill.pal98.classic.0127",
-                "斩龙诀1",
+                "斩龙诀",
                 295,
                 "skill-source.pal98-classic",
                 295,
@@ -406,7 +488,7 @@ static void TestComposedContentCatalog()
                 false) + "," +
             ContentMagicJson(
                 "skill.hunqian167.easy.018f",
-                "斩龙诀2",
+                "斩龙诀1",
                 708,
                 "skill-source.hunqian167.easy",
                 399,
@@ -473,9 +555,9 @@ static void TestComposedContentCatalog()
         Equal("active-profile-content-catalog-sha256", resolved.Evidence,
             "content catalog evidence");
         Equal(2, resolved.Skills.Count, "all grantable catalog skills exposed");
-        Equal("斩龙诀1", resolved.Skills[0].DisplayName,
-            "classic same-name variant keeps its numbered catalog name");
-        Equal("斩龙诀2", resolved.Skills[1].DisplayName,
+        Equal("斩龙诀", resolved.Skills[0].DisplayName,
+            "classic same-name variant keeps its original catalog name");
+        Equal("斩龙诀1", resolved.Skills[1].DisplayName,
             "extended same-name variant keeps its numbered catalog name");
         Equal((ushort)708, resolved.Skills[1].ObjectId,
             "extended object id is not limited by classic WORD count");
@@ -492,6 +574,14 @@ static void TestComposedContentCatalog()
         document.AddMagic(0, resolved.Skills[1].ObjectId);
         Equal((ushort)708, document.GetMagics(0).Single().MagicId,
             "extended skill id round trips through the save layout");
+
+        File.WriteAllText(
+            contentCatalogPath,
+            contentCatalog.Replace("\"斩龙诀1\"", "\"风雪冰天1-1\""),
+            new UTF8Encoding(false));
+        Throws<InvalidDataException>(
+            () => PalSkillRegistryCatalog.ResolveContentCatalog(resources),
+            "reject content-catalog names wider than one PAL98 WORD record");
     }
     finally
     {
@@ -538,15 +628,21 @@ static void TestOptionalComposedSkillProfile()
         "PAL98_SKILL_COMPOSITION_RUNTIME_PROFILE_ID") ??
         "pal98.classic.skill-library.hunqian167";
     string expectedProfileVersion = Environment.GetEnvironmentVariable(
-        "PAL98_SKILL_COMPOSITION_RUNTIME_PROFILE_VERSION") ?? "1.0.1";
+        "PAL98_SKILL_COMPOSITION_RUNTIME_PROFILE_VERSION") ?? "1.0.10";
     int expectedBaseObjectCount = ReadEnvironmentInt(
         "PAL98_SKILL_COMPOSITION_BASE_OBJECT_COUNT", 565);
     int expectedRuntimeObjectCount = ReadEnvironmentInt(
-        "PAL98_SKILL_COMPOSITION_RUNTIME_OBJECT_COUNT", 722);
+        "PAL98_SKILL_COMPOSITION_RUNTIME_OBJECT_COUNT", 676);
     int expectedWordCount = ReadEnvironmentInt(
         "PAL98_SKILL_COMPOSITION_WORD_COUNT", 565);
     ushort expectedMaximumVisibleObjectId = checked((ushort)ReadEnvironmentInt(
-        "PAL98_SKILL_COMPOSITION_MAX_VISIBLE_OBJECT_ID", 708));
+        "PAL98_SKILL_COMPOSITION_MAX_VISIBLE_OBJECT_ID", 666));
+    int expectedSkillCount = ReadEnvironmentInt(
+        "PAL98_SKILL_COMPOSITION_VISIBLE_SKILL_COUNT", 206);
+    int expectedClassicSkillCount = ReadEnvironmentInt(
+        "PAL98_SKILL_COMPOSITION_CLASSIC_SKILL_COUNT", 104);
+    int expectedHunqianSkillCount = ReadEnvironmentInt(
+        "PAL98_SKILL_COMPOSITION_HUNQIAN_SKILL_COUNT", 102);
     Equal(expectedProfileId, resources.ActiveProfileId!,
         "composed profile id");
     Equal(expectedProfileVersion, resources.ActiveProfileVersion!,
@@ -562,11 +658,12 @@ static void TestOptionalComposedSkillProfile()
 
     PalSkillRegistryResolution resolved =
         PalSkillRegistryCatalog.ResolveContentCatalog(resources);
-    Equal(239, resolved.Skills.Count, "composed profile visible skill count");
-    Equal(95, resolved.Skills.Count(skill =>
+    Equal(expectedSkillCount, resolved.Skills.Count,
+        "composed profile visible skill count");
+    Equal(expectedClassicSkillCount, resolved.Skills.Count(skill =>
         skill.SkillSetId == PalSkillRegistryCatalog.ClassicSkillSetId),
         "composed profile classic skill count");
-    Equal(144, resolved.Skills.Count(skill =>
+    Equal(expectedHunqianSkillCount, resolved.Skills.Count(skill =>
         skill.SkillSetId == PalSkillRegistryCatalog.ComposedHunqian167SkillSetId),
         "composed profile Hunqian skill count");
     Equal(expectedMaximumVisibleObjectId,

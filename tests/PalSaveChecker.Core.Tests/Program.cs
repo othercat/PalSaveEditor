@@ -7,12 +7,14 @@ using PalSaveEditor.Core;
 var failures = new List<string>();
 Run("Tools parent directory", TestGameDirectoryLocator);
 Run("clean save", TestCleanSave);
+Run("redundant stale native sidecar is ignored", TestRedundantStaleNativeSidecar);
 Run("polluted player records repair with backup", TestPollutedPlayerRecordsRepair);
 Run("polluted save repair without retained backup", TestPollutedSaveRepairWithoutBackup);
 Run("dynamic script state boundary", TestDynamicScriptBoundary);
 Run("empty contact trigger repair", TestEmptyContactTriggerRepair);
 Run("extended magic sidecar repair preserves recoverable slots", TestExtendedMagicSidecarRepair);
 Run("malformed extended magic sidecar falls back safely", TestMalformedExtendedMagicSidecarRepair);
+Run("active profile stale learned magic ids are migrated", TestActiveProfileStaleRandomMagicRepair);
 Run("GBK config and Chinese patch name", TestGbkConfig);
 Run("invalid patch fails closed", TestInvalidPatchFailsClosed);
 Run("Dream 2.2 visible active profile contract", TestDream220VisibleActiveProfile);
@@ -70,6 +72,39 @@ static void TestCleanSave()
     Equal(SaveCheckStatus.Clean, report.Saves[0].Status, "1.RPG status");
     Equal(false, report.HasProblems, "clean report");
     Contains(report.ReferenceDescription, "fixture-patch.zip", "ZIP reference");
+}
+
+static void TestRedundantStaleNativeSidecar()
+{
+    using Fixture fixture = Fixture.Create();
+    string savePath = Path.Combine(fixture.Root, "1.RPG");
+    byte[] bytes = File.ReadAllBytes(savePath);
+    WriteUInt16(bytes, PalSaveLayout.MagicOffset(0, 0), 321);
+    File.WriteAllBytes(savePath, bytes);
+
+    var state = ExtendedRoleMagicState.FromPhysicalPage0(bytes);
+    Equal(false, state.HasExtendedPayload,
+        "native 32-slot state has no extended payload");
+    ExtendedRoleMagicSidecar.WriteAtomically(savePath, bytes, state);
+    string sidecarPath = ExtendedRoleMagicSidecar.GetPath(savePath);
+    string originalSidecarHash = HashFile(sidecarPath);
+
+    bytes[PalSaveLayout.CashOffset] ^= 1;
+    File.WriteAllBytes(savePath, bytes);
+    var service = new SaveCompatibilityService();
+    SaveCheckReport report = service.Check(fixture.Root);
+    Equal(SaveCheckStatus.Clean, report.Saves[0].Status,
+        "stale redundant sidecar does not pollute a native save");
+    Equal(false, report.Saves[0].ExtendedMagicSidecarIssue,
+        "stale redundant sidecar is not classified as a repair issue");
+    Equal(false, report.HasProblems,
+        "redundant stale sidecar does not require repair");
+
+    SaveRepairReport noOp = service.Repair(fixture.Root, keepBackup: false);
+    Equal(0, noOp.Results.Count,
+        "repair leaves an already-compatible native save alone");
+    Equal(originalSidecarHash, HashFile(sidecarPath),
+        "checker does not rewrite the harmless stale sidecar");
 }
 
 static void TestPollutedPlayerRecordsRepair()
@@ -193,6 +228,9 @@ static void TestExtendedMagicSidecarRepair()
         state.Roles[0][magic - 100] = magic;
     }
     state.Roles[5][0] = 500;
+    state.HasRandomLevelProgress = true;
+    state.RandomLevelAppliedThroughLevel[0] = 99;
+    state.RandomLevelAppliedThroughLevel[5] = 60;
     state.ProjectActivePage(bytes);
     File.WriteAllBytes(savePath, bytes);
     ExtendedRoleMagicSidecar.WriteAtomically(savePath, bytes, state);
@@ -212,6 +250,12 @@ static void TestExtendedMagicSidecarRepair()
         savePath, repaired, out var restored, out _), "sidecar is strictly rebound");
     Equal((ushort)139, restored.Roles[0][39], "recoverable slot beyond 32 is preserved");
     Equal((ushort)500, restored.Roles[5][0], "sixth-role slot is preserved");
+    Equal(true, restored.HasRandomLevelProgress,
+        "random level progress survives sidecar rebinding repair");
+    Equal((ushort)99, restored.RandomLevelAppliedThroughLevel[0],
+        "role zero random level progress survives repair");
+    Equal((ushort)60, restored.RandomLevelAppliedThroughLevel[5],
+        "sixth-role random level progress survives repair");
 }
 
 static void TestMalformedExtendedMagicSidecarRepair()
@@ -235,6 +279,94 @@ static void TestMalformedExtendedMagicSidecarRepair()
         savePath, repaired, out var restored, out _), "replacement sidecar is valid");
     Equal((ushort)321, restored.Roles[0][0], "physical page zero is retained");
     Equal((ushort)0, restored.Roles[0][32], "unrecoverable extra slots are cleared");
+}
+
+static void TestActiveProfileStaleRandomMagicRepair()
+{
+    using Fixture fixture = Fixture.Create(resourceObjectCount: 600);
+    const string profileId = "pal98.test.skill-composition";
+    const string profileVersion = "1.0.2";
+    string contentCatalog =
+        "{" +
+        "\"schema\":\"PAL98.ContentCatalog.v1\"," +
+        "\"catalog_id\":\"pal98.test.catalog\"," +
+        "\"catalog_version\":\"1.0.0\"," +
+        $"\"profile_id\":\"{profileId}\"," +
+        $"\"profile_version\":\"{profileVersion}\"," +
+        $"\"save_namespace\":\"{profileId}\"," +
+        "\"magics\":[{" +
+        "\"logical_id\":\"skill.pal98.classic.test\"," +
+        "\"object_id\":600," +
+        "\"display_name\":\"测试术\"," +
+        "\"status\":\"pal98-static-verified\"," +
+        "\"learnable\":true," +
+        "\"randomizable\":true," +
+        "\"grantable\":true," +
+        "\"exclusions\":[]," +
+        "\"source_mappings\":[{" +
+        "\"source_set_id\":\"skill-source.pal98-classic\"," +
+        "\"object_id\":600}]}]}";
+    fixture.EnableActiveProfile(
+        profileId,
+        profileVersion,
+        "测试技能组合包",
+        wordDatByteLength: 6_000,
+        saveNamespace: profileId,
+        skillObjects: Fixture.BuildSkillObjectsPack(600, 2),
+        contentCatalogJson: contentCatalog);
+    string historicalDirectory = Directory.CreateDirectory(Path.Combine(
+        fixture.Root,
+        "palmod",
+        "Profiles",
+        profileId,
+        "1.0.1",
+        "palmod",
+        "profile")).FullName;
+    string historicalCatalog = contentCatalog
+        .Replace($"\"profile_version\":\"{profileVersion}\"", "\"profile_version\":\"1.0.1\"")
+        .Replace("\"object_id\":600,", "\"object_id\":688,")
+        .Replace("\"object_id\":600}]", "\"object_id\":688}]");
+    File.WriteAllText(
+        Path.Combine(historicalDirectory, "content-catalog.json"),
+        historicalCatalog,
+        new UTF8Encoding(false));
+
+    string savePath = Path.Combine(fixture.Root, "1.RPG");
+    byte[] bytes = File.ReadAllBytes(savePath);
+    var state = ExtendedRoleMagicState.FromPhysicalPage0(bytes);
+    state.Roles[0][0] = 688;
+    state.Roles[0][1] = 600;
+    state.HasRandomLevelProgress = true;
+    state.RandomLevelAppliedThroughLevel[0] = 99;
+    state.ProjectActivePage(bytes);
+    File.WriteAllBytes(savePath, bytes);
+    ExtendedRoleMagicSidecar.WriteAtomically(savePath, bytes, state);
+
+    var service = new SaveCompatibilityService();
+    SaveCheckReport before = service.Check(fixture.Root);
+    Equal(SaveCheckStatus.Polluted, before.Saves[0].Status,
+        "stale active-profile object id is detected");
+    Equal(true, before.Saves[0].LearnedMagicProfileIssue,
+        "stale active-profile learned magic is classified");
+    Contains(before.Saves[0].LearnedMagicProfileError, "1 个可迁移",
+        "migratable object count is reported");
+
+    SaveRepairReport repair = service.Repair(fixture.Root, keepBackup: false);
+    Equal(false, repair.HasFailures, "stale random sidecar repair succeeds");
+    byte[] repaired = File.ReadAllBytes(savePath);
+    Equal(true, ExtendedRoleMagicSidecar.TryLoad(
+        savePath, repaired, out var restored, out _),
+        "reset random sidecar is rebound to repaired RPG");
+    Equal(false, restored.HasRandomLevelProgress,
+        "stale random level progress is reset for current-profile refill");
+    Equal((ushort)600, restored.Roles[0][0],
+        "stale random skill is mapped by stable logical id");
+    Equal((ushort)600, ReadUInt16(repaired, PalSaveLayout.MagicOffset(0, 0)),
+        "RPG physical magic page receives the mapped object id");
+    Equal((ushort)0, restored.Roles[0][1],
+        "migration removes the duplicate current object id");
+    Equal(SaveCheckStatus.Clean, repair.After.Saves[0].Status,
+        "repaired sidecar passes current active-profile catalog check");
 }
 
 static void TestInvalidPatchFailsClosed()
@@ -575,7 +707,9 @@ file sealed class Fixture : IDisposable
         string profileVersion,
         string displayName,
         int wordDatByteLength = 5_750,
-        string? saveNamespace = null)
+        string? saveNamespace = null,
+        byte[]? skillObjects = null,
+        string? contentCatalogJson = null)
     {
         string staged = Path.Combine(Root, "palmod", "Profiles", profileId, profileVersion);
         string resources = Directory.CreateDirectory(Path.Combine(staged, "resources")).FullName;
@@ -585,6 +719,27 @@ file sealed class Fixture : IDisposable
         File.WriteAllBytes(sssPath, _sssBytes);
         File.WriteAllBytes(wordPath, new byte[wordDatByteLength]);
 
+        var resourceEntries = new List<string>
+        {
+            ResourceJson("SSS.MKF", "resources/SSS.MKF", sssPath),
+            ResourceJson("WORD.DAT", "resources/WORD.DAT", wordPath),
+        };
+        if (skillObjects is not null)
+        {
+            string skillObjectsPath = Path.Combine(resources, "SKILL.OBJECTS");
+            File.WriteAllBytes(skillObjectsPath, skillObjects);
+            resourceEntries.Add(ResourceJson(
+                "SKILL.OBJECTS", "resources/SKILL.OBJECTS", skillObjectsPath));
+        }
+        if (contentCatalogJson is not null)
+        {
+            string contentCatalogPath = Path.Combine(resources, "CONTENT.CATALOG");
+            File.WriteAllText(
+                contentCatalogPath, contentCatalogJson, new UTF8Encoding(false));
+            resourceEntries.Add(ResourceJson(
+                "CONTENT.CATALOG", "resources/CONTENT.CATALOG", contentCatalogPath));
+        }
+
         string descriptor =
             "{" +
             "\"schema\":\"PAL98.GameProfile.v1\"," +
@@ -592,10 +747,7 @@ file sealed class Fixture : IDisposable
             $"\"profile_version\":\"{profileVersion}\"," +
             $"\"display_name\":\"{displayName}\"," +
             (saveNamespace is null ? string.Empty : $"\"save_namespace\":\"{saveNamespace}\",") +
-            "\"resource_set\":[" +
-            ResourceJson("SSS.MKF", "resources/SSS.MKF", sssPath) + "," +
-            ResourceJson("WORD.DAT", "resources/WORD.DAT", wordPath) +
-            "]}";
+            "\"resource_set\":[" + string.Join(",", resourceEntries) + "]}";
         string descriptorPath = Path.Combine(manifest, "game-profile.json");
         File.WriteAllText(descriptorPath, descriptor, new UTF8Encoding(false));
         string descriptorHash = HashFileLocal(descriptorPath).ToLowerInvariant();
@@ -625,6 +777,30 @@ file sealed class Fixture : IDisposable
         using FileStream stream = File.OpenRead(path);
         using SHA256 sha256 = SHA256.Create();
         return BitConverter.ToString(sha256.ComputeHash(stream)).Replace("-", string.Empty);
+    }
+
+    public static byte[] BuildSkillObjectsPack(int firstObjectId, int recordCount)
+    {
+        const int headerBytes = 20;
+        const int objectBytes = 14;
+        const int wordBytes = 10;
+        byte[] result = new byte[headerBytes + recordCount * (objectBytes + wordBytes)];
+        result[0] = (byte)'P';
+        result[1] = (byte)'S';
+        result[2] = (byte)'O';
+        result[3] = (byte)'1';
+        WriteUInt16Local(result, 4, 1);
+        WriteUInt16Local(result, 6, objectBytes);
+        WriteUInt16Local(result, 8, wordBytes);
+        WriteUInt32(result, 12, checked((uint)firstObjectId));
+        WriteUInt32(result, 16, checked((uint)recordCount));
+        for (int index = 0; index < recordCount; index++)
+        {
+            int offset = headerBytes + index * (objectBytes + wordBytes);
+            result[offset] = 1;
+            result[offset + objectBytes] = (byte)'X';
+        }
+        return result;
     }
 
     public void Dispose()

@@ -534,8 +534,19 @@ public sealed class PalSaveDocument
 
     public SaveWriteResult Save(string? targetPath = null, bool createBackup = true)
     {
+        if (!string.IsNullOrWhiteSpace(ExtendedMagicSidecarWarning) &&
+            _extendedMagics.HasExtendedPayload)
+        {
+            throw new InvalidOperationException(
+                "当前扩展法术槽 sidecar 需要先使用仙剑98存档检查工具修复；编辑器不会覆盖它。");
+        }
+
         _extendedMagics.ProjectActivePage(_bytes);
         var destination = System.IO.Path.GetFullPath(targetPath ?? Path);
+        bool savesToOriginalPath = string.Equals(
+            destination,
+            System.IO.Path.GetFullPath(Path),
+            StringComparison.OrdinalIgnoreCase);
         var directory = System.IO.Path.GetDirectoryName(destination)
             ?? throw new InvalidOperationException("无法确定目标目录。");
         Directory.CreateDirectory(directory);
@@ -576,16 +587,28 @@ public sealed class PalSaveDocument
 
             if (ExtendedRoleMagicSidecar.SupportsPath(destination))
             {
-                ExtendedRoleMagicSidecar.WriteAtomically(
-                    destination, persisted, _extendedMagics);
-                HasExtendedMagicSidecar = true;
-                ExtendedMagicSidecarWarning = null;
+                if (_extendedMagics.HasExtendedPayload)
+                {
+                    ExtendedRoleMagicSidecar.WriteAtomically(
+                        destination, persisted, _extendedMagics);
+                    HasExtendedMagicSidecar = true;
+                    ExtendedMagicSidecarWarning = null;
+                }
+                else
+                {
+                    HasExtendedMagicSidecar = false;
+                    if (!savesToOriginalPath)
+                    {
+                        ExtendedMagicSidecarWarning = null;
+                    }
+                }
             }
             else
             {
                 HasExtendedMagicSidecar = false;
-                ExtendedMagicSidecarWarning =
-                    "仅 1.RPG 到 5.RPG 会保存 999 槽扩展数据；当前文件只保存原生页的 32 槽。";
+                ExtendedMagicSidecarWarning = _extendedMagics.HasExtendedPayload
+                    ? "仅 1.RPG 到 5.RPG 会保存 999 槽扩展数据；当前文件只保存原生页的 32 槽。"
+                    : null;
             }
 
             if (destinationExisted && !createBackup)

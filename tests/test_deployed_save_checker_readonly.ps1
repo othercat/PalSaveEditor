@@ -1,5 +1,6 @@
 param(
-    [Parameter(Mandatory = $true)][string]$GameDirectory
+    [Parameter(Mandatory = $true)][string]$GameDirectory,
+    [switch]$GeneralScanOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,7 +11,15 @@ if ([IntPtr]::Size -ne 4) {
     if (-not (Test-Path -LiteralPath $powerShell32)) {
         throw '32-bit Windows PowerShell is required to load the deployed x86 checker assemblies'
     }
-    & $powerShell32 -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -GameDirectory $GameDirectory
+    $checkerArguments = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $PSCommandPath,
+        '-GameDirectory', $GameDirectory)
+    if ($GeneralScanOnly) {
+        $checkerArguments += '-GeneralScanOnly'
+    }
+    & $powerShell32 @checkerArguments
     exit $LASTEXITCODE
 }
 
@@ -48,11 +57,15 @@ foreach ($item in @($report.Saves)) {
         $item.InvalidScriptCount, $item.EmptyContactTriggerCount, $item.Error)
 }
 
-$slot4 = @($report.Saves | Where-Object FileName -eq '4.RPG') | Select-Object -First 1
-$slot5 = @($report.Saves | Where-Object FileName -eq '5.RPG') | Select-Object -First 1
-if ($null -eq $slot4 -or $null -eq $slot5 -or
-    $slot4.EmptyContactTriggerCount -ne 1 -or $slot5.EmptyContactTriggerCount -ne 1) {
-    throw 'Deployed checker did not detect the expected read-only 4.RPG/5.RPG empty-contact state'
+if (-not $GeneralScanOnly) {
+    $slot4 = @($report.Saves | Where-Object FileName -eq '4.RPG') | Select-Object -First 1
+    $slot5 = @($report.Saves | Where-Object FileName -eq '5.RPG') | Select-Object -First 1
+    if ($null -eq $slot4 -or $null -eq $slot5 -or
+        $slot4.EmptyContactTriggerCount -ne 1 -or $slot5.EmptyContactTriggerCount -ne 1) {
+        throw 'Deployed checker did not detect the expected read-only 4.RPG/5.RPG empty-contact state'
+    }
 }
 
-Write-Output 'PASS: deployed x86 save checker loaded with the existing shared editor core and performed the expected read-only scan'
+Write-Output (
+    'PASS: deployed x86 save checker loaded with the existing shared editor core and performed the expected read-only scan' +
+    $(if ($GeneralScanOnly) { ' (general profile mode)' } else { '' }))

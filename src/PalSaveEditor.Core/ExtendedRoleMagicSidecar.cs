@@ -14,13 +14,48 @@ public sealed class ExtendedRoleMagicState
     public const string Suffix = ".pal98-ext-magics.json";
 
     public ushort ActivePage { get; set; }
+    public bool HasRandomLevelProgress { get; set; }
+    public ushort[] RandomLevelAppliedThroughLevel { get; } = new ushort[RoleCount];
     public ushort[][] Roles { get; } = Enumerable.Range(0, RoleCount)
         .Select(_ => new ushort[CapacityPerRole])
         .ToArray();
 
+    public bool HasExtendedPayload
+    {
+        get
+        {
+            if (ActivePage != 0 ||
+                HasRandomLevelProgress ||
+                RandomLevelAppliedThroughLevel.Any(level => level != 0))
+            {
+                return true;
+            }
+
+            for (var role = 0; role < RoleCount; role++)
+            {
+                for (var slot = PageSize; slot < CapacityPerRole; slot++)
+                {
+                    if (Roles[role][slot] != 0)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
     public ExtendedRoleMagicState Clone()
     {
-        var clone = new ExtendedRoleMagicState { ActivePage = ActivePage };
+        var clone = new ExtendedRoleMagicState
+        {
+            ActivePage = ActivePage,
+            HasRandomLevelProgress = HasRandomLevelProgress
+        };
+        Array.Copy(
+            RandomLevelAppliedThroughLevel,
+            clone.RandomLevelAppliedThroughLevel,
+            RoleCount);
         for (var role = 0; role < RoleCount; role++)
         {
             Array.Copy(Roles[role], clone.Roles[role], CapacityPerRole);
@@ -30,6 +65,9 @@ public sealed class ExtendedRoleMagicState
 
     public bool ContentEquals(ExtendedRoleMagicState other) =>
         ActivePage == other.ActivePage &&
+        HasRandomLevelProgress == other.HasRandomLevelProgress &&
+        RandomLevelAppliedThroughLevel.AsSpan().SequenceEqual(
+            other.RandomLevelAppliedThroughLevel) &&
         Enumerable.Range(0, RoleCount)
             .All(role => Roles[role].AsSpan().SequenceEqual(other.Roles[role]));
 
@@ -112,10 +150,15 @@ public static class ExtendedRoleMagicSidecar
                 File.ReadAllBytes(sidecarPath),
                 new JsonDocumentOptions { MaxDepth = 8 });
             var root = document.RootElement;
-            RequireOnlyProperties(root,
-                "schema", "schema_version", "save_file", "rpg_size",
-                "rpg_sha256", "role_count", "capacity_per_role",
-                "page_size", "active_page", "roles");
+            RequireProperties(
+                root,
+                new[]
+                {
+                    "schema", "schema_version", "save_file", "rpg_size",
+                    "rpg_sha256", "role_count", "capacity_per_role",
+                    "page_size", "active_page", "roles"
+                },
+                new[] { "random_level_progress" });
             if (root.GetProperty("schema").GetString() != ExtendedRoleMagicState.Schema ||
                 root.GetProperty("schema_version").GetInt32() != 1 ||
                 !string.Equals(
@@ -140,6 +183,35 @@ public static class ExtendedRoleMagicSidecar
                 throw new InvalidDataException("扩展法术槽角色数无效。");
             }
             var loaded = new ExtendedRoleMagicState { ActivePage = (ushort)activePage };
+            if (root.TryGetProperty("random_level_progress", out var progress))
+            {
+                RequireProperties(
+                    progress,
+                    new[] { "schema_version", "applied_through_level" },
+                    Array.Empty<string>());
+                if (progress.GetProperty("schema_version").GetInt32() != 1)
+                {
+                    throw new InvalidDataException("随机等级技能进度版本无效。");
+                }
+                var appliedThrough = progress.GetProperty("applied_through_level");
+                if (appliedThrough.ValueKind != JsonValueKind.Array ||
+                    appliedThrough.GetArrayLength() != ExtendedRoleMagicState.RoleCount)
+                {
+                    throw new InvalidDataException("随机等级技能进度角色数无效。");
+                }
+                var progressRole = 0;
+                foreach (var value in appliedThrough.EnumerateArray())
+                {
+                    var level = value.GetInt32();
+                    if (level is < 0 or > 99)
+                    {
+                        throw new InvalidDataException("随机等级技能进度超出0到99级。");
+                    }
+                    loaded.RandomLevelAppliedThroughLevel[progressRole++] =
+                        (ushort)level;
+                }
+                loaded.HasRandomLevelProgress = true;
+            }
             var roleIndex = 0;
             foreach (var row in roles.EnumerateArray())
             {
@@ -164,7 +236,16 @@ public static class ExtendedRoleMagicSidecar
             if (root.GetProperty("rpg_size").GetInt64() != rpgBytes.Length ||
                 root.GetProperty("rpg_sha256").GetString() != Hash(rpgBytes))
             {
-                warning = "扩展法术槽 sidecar 的 RPG 大小或 SHA-256 绑定已失效。";
+                if (!loaded.HasExtendedPayload)
+                {
+                    state = ExtendedRoleMagicState.FromPhysicalPage0(rpgBytes);
+                    warning = null;
+                    return false;
+                }
+
+                warning =
+                    "扩展法术槽 sidecar 的 RPG 大小或 SHA-256 绑定已失效，且包含原生 32 槽之外的数据；" +
+                    "请先使用仙剑98存档检查工具修复，编辑器不会覆盖该 sidecar。";
                 if (!preserveStateOnBindingMismatch)
                 {
                     state = ExtendedRoleMagicState.FromPhysicalPage0(rpgBytes);
@@ -175,7 +256,9 @@ public static class ExtendedRoleMagicSidecar
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         {
-            warning = $"扩展法术槽 sidecar 无效，当前仅加载 RPG 的原生 32 槽：{ex.Message}";
+            warning =
+                $"扩展法术槽 sidecar 无效，当前仅加载 RPG 的原生 32 槽；" +
+                $"请使用仙剑98存档检查工具修复，编辑器不会覆盖该 sidecar：{ex.Message}";
             return false;
         }
     }
@@ -207,6 +290,25 @@ public static class ExtendedRoleMagicSidecar
                 writer.WriteNumber("capacity_per_role", ExtendedRoleMagicState.CapacityPerRole);
                 writer.WriteNumber("page_size", ExtendedRoleMagicState.PageSize);
                 writer.WriteNumber("active_page", state.ActivePage);
+                if (state.HasRandomLevelProgress)
+                {
+                    writer.WritePropertyName("random_level_progress");
+                    writer.WriteStartObject();
+                    writer.WriteNumber("schema_version", 1);
+                    writer.WritePropertyName("applied_through_level");
+                    writer.WriteStartArray();
+                    foreach (var level in state.RandomLevelAppliedThroughLevel)
+                    {
+                        if (level > 99)
+                        {
+                            throw new InvalidDataException(
+                                "随机等级技能进度超出0到99级。");
+                        }
+                        writer.WriteNumberValue(level);
+                    }
+                    writer.WriteEndArray();
+                    writer.WriteEndObject();
+                }
                 writer.WritePropertyName("roles");
                 writer.WriteStartArray();
                 foreach (var role in state.Roles)
@@ -243,21 +345,27 @@ public static class ExtendedRoleMagicSidecar
             .ToLowerInvariant();
     }
 
-    private static void RequireOnlyProperties(JsonElement root, params string[] names)
+    private static void RequireProperties(
+        JsonElement root,
+        IReadOnlyCollection<string> requiredNames,
+        IReadOnlyCollection<string> optionalNames)
     {
         if (root.ValueKind != JsonValueKind.Object)
         {
             throw new InvalidDataException("扩展法术槽 sidecar 根节点不是对象。");
         }
-        var allowed = new HashSet<string>(names, StringComparer.Ordinal);
+        var required = new HashSet<string>(requiredNames, StringComparer.Ordinal);
+        var allowed = new HashSet<string>(requiredNames, StringComparer.Ordinal);
+        allowed.UnionWith(optionalNames);
         foreach (var property in root.EnumerateObject())
         {
-            if (!allowed.Remove(property.Name))
+            if (!allowed.Contains(property.Name))
             {
                 throw new InvalidDataException($"扩展法术槽 sidecar 含未知字段：{property.Name}。");
             }
+            required.Remove(property.Name);
         }
-        if (allowed.Count != 0)
+        if (required.Count != 0)
         {
             throw new InvalidDataException("扩展法术槽 sidecar 缺少必要字段。");
         }
