@@ -62,9 +62,14 @@ public static class GameDirectoryLocator
         }
 
         var directory = new DirectoryInfo(Path.GetFullPath(executableDirectory));
-        return directory.Name.Equals("tools", StringComparison.OrdinalIgnoreCase) && directory.Parent is not null
-            ? directory.Parent.FullName
-            : directory.FullName;
+        DirectoryInfo? toolsDirectory = directory.Name.Equals("tools", StringComparison.OrdinalIgnoreCase)
+            ? directory
+            : directory.Parent is not null &&
+              directory.Parent.Name.Equals("tools", StringComparison.OrdinalIgnoreCase)
+                ? directory.Parent
+                : null;
+
+        return toolsDirectory?.Parent?.FullName ?? directory.FullName;
     }
 }
 

@@ -5,7 +5,7 @@ using PalSaveChecker.Core;
 using PalSaveEditor.Core;
 
 var failures = new List<string>();
-Run("Tools parent directory", TestGameDirectoryLocator);
+Run("Tools deployment layouts", TestGameDirectoryLocator);
 Run("clean save", TestCleanSave);
 Run("redundant stale native sidecar is ignored", TestRedundantStaleNativeSidecar);
 Run("polluted player records repair with backup", TestPollutedPlayerRecordsRepair);
@@ -56,7 +56,9 @@ static void TestGameDirectoryLocator()
     try
     {
         string tools = Directory.CreateDirectory(Path.Combine(root, "Tools")).FullName;
+        string checker = Directory.CreateDirectory(Path.Combine(tools, "PalSaveChecker")).FullName;
         Equal(Path.GetFullPath(root), GameDirectoryLocator.Resolve(tools), "Tools should resolve to parent");
+        Equal(Path.GetFullPath(root), GameDirectoryLocator.Resolve(checker), "Tools child should resolve to game root");
         Equal(Path.GetFullPath(root), GameDirectoryLocator.Resolve(root), "non-Tools should remain unchanged");
     }
     finally

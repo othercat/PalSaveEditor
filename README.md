@@ -55,7 +55,7 @@ dotnet build .\PalSaveEditor.slnx -c Release
 .\tests\PalSaveEditor.Core.Tests\bin\Release\net472\PalSaveEditor.Core.Tests.exe
 ```
 
-面向 Windows 7 SP1、Windows 10、Windows 11，以及 Windows 11 ARM x86 模拟环境的正式发布目标是 .NET Framework 4.7.2 x86。它不需要安装 .NET 8 Desktop Runtime；未安装 .NET Framework 4.7.2 或更高 4.x 版本的系统仍需先安装相应运行环境。发布目录中的 EXE、DLL 和 exe.config 必须一起分发：
+面向 Windows 7 SP1、Windows 10、Windows 11，以及 Windows 11 ARM x86 模拟环境的正式发布目标是 .NET Framework 4.7.2 x86。它不需要安装 .NET 8 Desktop Runtime；未安装 .NET Framework 4.7.2 或更高 4.x 版本的系统仍需先安装相应运行环境。完整游戏包应把编辑器和检查器分别部署到 `Tools/PalSaveEditor` 与 `Tools/PalSaveChecker`，每个目录都携带该程序所需的 EXE、DLL 和 exe.config；旧版直接放在 `Tools` 下的检查器仍可识别游戏根目录：
 
 ```powershell
 dotnet publish .\src\PalSaveEditor.WinForms\PalSaveEditor.WinForms.csproj `
