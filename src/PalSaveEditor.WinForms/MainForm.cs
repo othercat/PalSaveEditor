@@ -19,6 +19,7 @@ internal sealed class MainForm : Form
     private readonly ToolStripButton _saveButton = new("保存") { Enabled = false };
     private readonly ToolStripButton _saveAsButton = new("另存为") { Enabled = false };
     private readonly ToolStripButton _resourcesButton = new("游戏资料目录") { Enabled = false };
+    private readonly ToolStripButton _customRolesButton = new("自定义主角库") { Enabled = false };
     private readonly CheckBox _keepBackupCheckBox = new()
     {
         Text = "保留原存档备份",
@@ -41,6 +42,7 @@ internal sealed class MainForm : Form
     private readonly ListBox _partyList = new() { Dock = DockStyle.Fill, IntegralHeight = false };
     private readonly ListBox _followerList = new() { Dock = DockStyle.Fill, IntegralHeight = false };
     private readonly ComboBox _roleCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    private readonly TextBox _roleName = new() { Dock = DockStyle.Fill, MaxLength = 10 };
     private readonly NumericUpDown _experience = CreateUShortNumeric();
     private readonly Dictionary<RoleField, NumericUpDown> _roleFields = new();
     private readonly ListBox _magicList = new() { Dock = DockStyle.Fill, IntegralHeight = false };
@@ -67,7 +69,7 @@ internal sealed class MainForm : Form
 
     public MainForm(string? initialPath)
     {
-        Text = "仙剑存档编辑器";
+        Text = "仙剑98编辑器";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new(1_020, 700);
         ClientSize = new(1_180, 780);
@@ -139,7 +141,7 @@ internal sealed class MainForm : Form
             MessageBoxIcon.Information));
         help.DropDownItems.Add("关于", null, (_, _) => MessageBox.Show(
             this,
-            "仙剑存档编辑器\r\n支持：仙剑 98 柔情版、仙剑 DOS、梦幻 2.20 DOS 版和梦幻2.2显血版。\r\n梦幻2.2显血版：主播粉丝、孙小柔、othercat。\r\n界面信息架构参考 PalEdit，解析与写入核心重新实现。",
+            "仙剑98编辑器\r\n支持：仙剑 98 柔情版、仙剑 DOS、梦幻 2.20 DOS 版和梦幻2.2显血版。\r\n可编辑固定自定义主角库、姓名、完整属性、隐藏属性和等级领悟表。\r\n梦幻2.2显血版：主播粉丝、孙小柔、othercat。",
             "关于",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information));
@@ -157,6 +159,7 @@ internal sealed class MainForm : Form
         strip.Items.Add(_saveAsButton);
         strip.Items.Add(new ToolStripSeparator());
         strip.Items.Add(_resourcesButton);
+        strip.Items.Add(_customRolesButton);
         strip.Items.Add(new ToolStripSeparator());
         strip.Items.Add(new ToolStripLabel("存档格式："));
         strip.Items.Add(_formatCombo);
@@ -211,13 +214,17 @@ internal sealed class MainForm : Form
         right.RowStyles.Add(new(SizeType.Percent, 64));
         right.RowStyles.Add(new(SizeType.Percent, 36));
 
-        var rolePicker = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 3 };
+        var rolePicker = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 5 };
         rolePicker.ColumnStyles.Add(new(SizeType.AutoSize));
-        rolePicker.ColumnStyles.Add(new(SizeType.Percent, 100));
+        rolePicker.ColumnStyles.Add(new(SizeType.Percent, 55));
+        rolePicker.ColumnStyles.Add(new(SizeType.AutoSize));
+        rolePicker.ColumnStyles.Add(new(SizeType.Percent, 45));
         rolePicker.ColumnStyles.Add(new(SizeType.AutoSize));
         rolePicker.Controls.Add(new Label { Text = "角色：", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
         rolePicker.Controls.Add(_roleCombo, 1, 0);
-        rolePicker.Controls.Add(CreateButton("最强属性", (_, _) => ApplyStrongestRole()), 2, 0);
+        rolePicker.Controls.Add(new Label { Text = "姓名：", AutoSize = true, Anchor = AnchorStyles.Left }, 2, 0);
+        rolePicker.Controls.Add(_roleName, 3, 0);
+        rolePicker.Controls.Add(CreateButton("最强属性", (_, _) => ApplyStrongestRole()), 4, 0);
         right.Controls.Add(rolePicker, 0, 0);
 
         var properties = new GroupBox { Text = "角色属性", Dock = DockStyle.Fill };
@@ -374,6 +381,7 @@ internal sealed class MainForm : Form
         _saveButton.Click += (_, _) => SaveDocument();
         _saveAsButton.Click += (_, _) => SaveDocumentAs();
         _resourcesButton.Click += (_, _) => SelectResourceDirectory();
+        _customRolesButton.Click += (_, _) => OpenCustomRoleLibrary();
         _formatCombo.SelectedIndexChanged += (_, _) =>
         {
             if (_loadingControls || _document is null || _formatCombo.SelectedItem is not FormatChoice choice)
@@ -397,6 +405,16 @@ internal sealed class MainForm : Form
         };
         _followerList.DoubleClick += (_, _) => EditFollower();
         _roleCombo.SelectedIndexChanged += (_, _) => LoadSelectedRole();
+        _roleName.Validated += (_, _) =>
+        {
+            if (_loadingControls || _document is null || SelectedRoleId is not int roleId) return;
+            RunUiAction(() =>
+            {
+                _document.SetRoleDisplayName(roleId, _roleName.Text.Trim());
+                RefreshRoleChoices(roleId);
+                UpdateDirtyState();
+            }, "无法修改姓名");
+        };
         _experience.ValueChanged += (_, _) =>
         {
             if (!_loadingControls && _document is not null && SelectedRoleId is int roleId)
@@ -469,6 +487,7 @@ internal sealed class MainForm : Form
             _saveButton.Enabled = true;
             _saveAsButton.Enabled = true;
             _resourcesButton.Enabled = true;
+            _customRolesButton.Enabled = true;
             _formatCombo.Enabled = true;
             RefreshAll();
             if (!string.IsNullOrWhiteSpace(_document.ExtendedMagicSidecarWarning))
@@ -480,6 +499,15 @@ internal sealed class MainForm : Form
                     "扩展法术槽提示",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
+            }
+            if (!string.IsNullOrWhiteSpace(_document.CustomRoleLibraryWarning) ||
+                !string.IsNullOrWhiteSpace(_document.CustomRoleSaveStateWarning))
+            {
+                string warning = _document.CustomRoleLibraryWarning
+                    ?? _document.CustomRoleSaveStateWarning!;
+                _status.Text = warning;
+                MessageBox.Show(this, warning, "自定义主角提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }, "无法打开存档");
     }
@@ -501,6 +529,8 @@ internal sealed class MainForm : Form
             {
                 _status.Text += $"；{_document.ExtendedMagicSidecarWarning}";
             }
+            if (_document.HasCustomRoleLibrary)
+                _status.Text += $"；自定义主角状态已同步";
             UpdateDirtyState();
         }, "保存失败");
     }
@@ -535,7 +565,7 @@ internal sealed class MainForm : Form
             {
                 _status.Text += $"；{_document.ExtendedMagicSidecarWarning}";
             }
-            Text = $"仙剑存档编辑器 - [{Path.GetFileName(result.TargetPath)}]";
+            Text = $"仙剑98编辑器 - [{Path.GetFileName(result.TargetPath)}]";
             UpdateDirtyState();
         }, "另存失败");
     }
@@ -568,6 +598,30 @@ internal sealed class MainForm : Form
         }, "无法读取游戏资料");
     }
 
+    private void OpenCustomRoleLibrary()
+    {
+        if (_document is null) return;
+        if (_document.IsDirty)
+        {
+            MessageBox.Show(this, "请先保存当前存档修改，再编辑固定自定义主角库。",
+                "自定义主角库", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        string gameDirectory = _document.Catalog?.ResourceContext.GameDirectory
+            ?? Path.GetDirectoryName(_document.Path)
+            ?? Environment.CurrentDirectory;
+        string savePath = _document.Path;
+        SaveFormat format = _document.Format;
+        RunUiAction(() =>
+        {
+            using var dialog = new CustomRoleLibraryForm(gameDirectory, _document);
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            _document = PalSaveDocument.Load(savePath, format, gameDirectory);
+            RefreshAll();
+            _status.Text = $"已重新载入固定角色库：{_document.CustomRoleLibraryPath}";
+        }, "无法编辑自定义主角库");
+    }
+
     private void RefreshAll()
     {
         if (_document is null)
@@ -580,7 +634,7 @@ internal sealed class MainForm : Form
         _loadingControls = true;
         try
         {
-            Text = $"仙剑存档编辑器 - [{Path.GetFileName(_document.Path)}]";
+            Text = $"仙剑98编辑器 - [{Path.GetFileName(_document.Path)}]";
             var formatIndex = _formatCombo.Items.Cast<FormatChoice>().ToList().FindIndex(choice => choice.Format == _document.Format);
             _formatCombo.SelectedIndex = Math.Max(0, formatIndex);
             RefreshRoleChoices();
@@ -616,7 +670,7 @@ internal sealed class MainForm : Form
         try
         {
             _roleCombo.Items.Clear();
-            for (var roleId = 0; roleId < PalSaveLayout.RoleCount; roleId++)
+            for (var roleId = 0; roleId < _document.RuntimeRoleCount; roleId++)
             {
                 _roleCombo.Items.Add(new RoleChoice(roleId, _document.GetRole(roleId).DisplayName));
             }
@@ -680,6 +734,7 @@ internal sealed class MainForm : Form
         try
         {
             var role = _document.GetRole(roleId);
+            _roleName.Text = role.DisplayName;
             _experience.Value = role.Experience;
             foreach (KeyValuePair<RoleField, NumericUpDown> pair in _roleFields)
             {
@@ -705,6 +760,7 @@ internal sealed class MainForm : Form
                 var row = _equipmentGrid.Rows.Add(EquipmentSlotNames[equipment.Slot], equipment.ItemId, equipment.DisplayName);
                 _equipmentGrid.Rows[row].Tag = equipment;
             }
+            _roleFields[RoleField.NameWordId].Enabled = roleId < PalSaveLayout.RoleCount;
         }
         finally
         {
@@ -831,7 +887,7 @@ internal sealed class MainForm : Form
             return;
         }
         var current = _document.GetParty().Select(member => member.RoleId).ToList();
-        var available = Enumerable.Range(0, PalSaveLayout.RoleCount).Select(value => (ushort)value).Where(id => !current.Contains(id)).ToList();
+        var available = Enumerable.Range(0, _document.RuntimeRoleCount).Select(value => (ushort)value).Where(id => !current.Contains(id)).ToList();
         if (current.Count + _document.FollowerCount >= PalSaveLayout.PartyCapacity || available.Count == 0)
         {
             MessageBox.Show(this, "正式队员与随从共享 5 条队列记录，当前已无空位。", "队伍调整", MessageBoxButtons.OK, MessageBoxIcon.Information);

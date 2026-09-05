@@ -8,6 +8,10 @@ public sealed class PalSaveDocument
     private readonly byte[] _bytes;
     private ExtendedRoleMagicState _extendedMagics;
     private ExtendedRoleMagicState _originalExtendedMagics;
+    private PalCustomRoleSaveState _customRoleState;
+    private PalCustomRoleSaveState _originalCustomRoleState;
+    private PalCustomRoleLibrary _originalCustomRoleLibrary;
+    private readonly string _customRoleGameDirectory;
 
     private PalSaveDocument(
         string path,
@@ -26,6 +30,33 @@ public sealed class PalSaveDocument
             Path, _bytes, out _extendedMagics, out var sidecarWarning);
         ExtendedMagicSidecarWarning = sidecarWarning;
         _originalExtendedMagics = _extendedMagics.Clone();
+        // The active profile redirects WORD/SSS reads into its staged resources
+        // directory, but the custom-role library is a game-owned fixed file.
+        // Keep it rooted at the game directory so every effective profile shares
+        // the same role namespace and PALDLL observes editor changes.
+        string gameDirectory = catalog?.ResourceContext.GameDirectory
+            ?? System.IO.Path.GetDirectoryName(Path)
+            ?? Environment.CurrentDirectory;
+        _customRoleGameDirectory = gameDirectory;
+        HasCustomRoleLibrary = PalCustomRoleLibraryStore.TryLoad(
+            gameDirectory, out PalCustomRoleLibrary library,
+            out string? libraryError, catalog?.RuntimeObjectRecordCount);
+        CustomRoleLibrary = library;
+        CustomRoleLibraryWarning = libraryError;
+        string? customSaveWarning = null;
+        if (HasCustomRoleLibrary)
+        {
+            HasCustomRoleSaveState = PalCustomRoleSaveStateStore.TryLoad(
+                Path, _bytes, library, out _customRoleState,
+                out customSaveWarning);
+        }
+        else
+        {
+            _customRoleState = PalCustomRoleSaveState.CreateInitial(CustomRoleLibrary);
+        }
+        CustomRoleSaveStateWarning = HasCustomRoleLibrary ? customSaveWarning : null;
+        _originalCustomRoleState = _customRoleState.Clone();
+        _originalCustomRoleLibrary = CustomRoleLibrary.Clone();
     }
 
     public string Path { get; private set; }
@@ -34,9 +65,19 @@ public sealed class PalSaveDocument
     public PalResourceCatalog? Catalog { get; private set; }
     public int Length => _bytes.Length;
     public bool IsDirty => !_bytes.AsSpan().SequenceEqual(_originalBytes) ||
-        !_extendedMagics.ContentEquals(_originalExtendedMagics);
+        !_extendedMagics.ContentEquals(_originalExtendedMagics) ||
+        !_customRoleState.ContentEquals(_originalCustomRoleState) ||
+        !CustomRoleLibrary.ContentEquals(_originalCustomRoleLibrary);
     public bool HasExtendedMagicSidecar { get; private set; }
     public string? ExtendedMagicSidecarWarning { get; private set; }
+    public PalCustomRoleLibrary CustomRoleLibrary { get; }
+    public bool HasCustomRoleLibrary { get; private set; }
+    public bool HasCustomRoleSaveState { get; private set; }
+    public string? CustomRoleLibraryWarning { get; }
+    public string? CustomRoleSaveStateWarning { get; private set; }
+    public int RuntimeRoleCount => CustomRoleLibrary.RuntimeRoleCount;
+    public string CustomRoleLibraryPath =>
+        PalCustomRoleLibraryStore.GetPath(_customRoleGameDirectory);
     public int MagicCapacity => ExtendedRoleMagicState.CapacityPerRole;
     public int ActiveMagicPage => _extendedMagics.ActivePage;
 
@@ -142,14 +183,14 @@ public sealed class PalSaveDocument
         {
             throw new ArgumentNullException(nameof(roleIds));
         }
-        if (roleIds.Count is < 1 or > PalSaveLayout.PartyCapacity)
+        if (roleIds.Count is < 1 or > 3)
         {
-            throw new ArgumentOutOfRangeException(nameof(roleIds), "队伍人数必须为 1 到 5。 ");
+            throw new ArgumentOutOfRangeException(nameof(roleIds), "当前运行时队伍人数必须为 1 到 3；四/五人战斗尚未启用。 ");
         }
 
-        if (roleIds.Any(id => id >= PalSaveLayout.RoleCount))
+        if (roleIds.Any(id => id >= RuntimeRoleCount))
         {
-            throw new ArgumentOutOfRangeException(nameof(roleIds), "角色编号必须为 0 到 5。 ");
+            throw new ArgumentOutOfRangeException(nameof(roleIds), $"角色编号必须为 0 到 {RuntimeRoleCount - 1}。 ");
         }
 
         if (roleIds.Distinct().Count() != roleIds.Count)
@@ -277,10 +318,15 @@ public sealed class PalSaveDocument
     {
         ValidateRole(roleId);
         var nameWordId = GetRoleField(roleId, RoleField.NameWordId);
+        string displayName = roleId < PalSaveLayout.RoleCount
+            ? CustomRoleLibrary.NativeRoleNames.TryGetValue(roleId, out string? nativeName)
+                ? nativeName
+                : Catalog?.GetRoleName(roleId, nameWordId) ?? $"角色 {roleId}"
+            : CustomRoleLibrary.CustomRoles[roleId - PalSaveLayout.RoleCount].DisplayName;
         return new(
             roleId,
             nameWordId,
-            Catalog?.GetRoleName(roleId, nameWordId) ?? $"角色 {roleId}",
+            displayName,
             GetRoleField(roleId, RoleField.Level),
             GetExperience(roleId),
             GetRoleField(roleId, RoleField.MaxHp),
@@ -296,27 +342,59 @@ public sealed class PalSaveDocument
             GetRoleField(roleId, RoleField.CooperativeMagic));
     }
 
+    public void SetRoleDisplayName(int roleId, string displayName)
+    {
+        ValidateRole(roleId);
+        PalCustomRoleLibraryStore.ValidateRoleName(displayName, $"role[{roleId}]");
+        if (roleId < PalSaveLayout.RoleCount)
+        {
+            CustomRoleLibrary.NativeRoleNames[roleId] = displayName;
+        }
+        else
+        {
+            CustomRoleLibrary.CustomRoles[roleId - PalSaveLayout.RoleCount].DisplayName = displayName;
+        }
+    }
+
     public ushort GetRoleField(int roleId, RoleField field)
     {
         ValidateRole(roleId);
+        if (roleId >= PalSaveLayout.RoleCount)
+        {
+            return unchecked((ushort)_customRoleState.GetRole(roleId).Fields[RuntimeFieldIndex(field)]);
+        }
         return ReadUInt16(PalSaveLayout.RoleFieldOffset(field, roleId));
     }
 
     public void SetRoleField(int roleId, RoleField field, ushort value)
     {
         ValidateRole(roleId);
+        if (roleId >= PalSaveLayout.RoleCount)
+        {
+            _customRoleState.GetRole(roleId).Fields[RuntimeFieldIndex(field)] = unchecked((short)value);
+            return;
+        }
         WriteUInt16(PalSaveLayout.RoleFieldOffset(field, roleId), value);
     }
 
     public short GetRoleSignedField(int roleId, RoleField field)
     {
         ValidateRole(roleId);
+        if (roleId >= PalSaveLayout.RoleCount)
+        {
+            return _customRoleState.GetRole(roleId).Fields[RuntimeFieldIndex(field)];
+        }
         return unchecked((short)ReadUInt16(PalSaveLayout.RoleFieldOffset(field, roleId)));
     }
 
     public void SetRoleSignedField(int roleId, RoleField field, short value)
     {
         ValidateRole(roleId);
+        if (roleId >= PalSaveLayout.RoleCount)
+        {
+            _customRoleState.GetRole(roleId).Fields[RuntimeFieldIndex(field)] = value;
+            return;
+        }
         WriteUInt16(PalSaveLayout.RoleFieldOffset(field, roleId), unchecked((ushort)value));
     }
 
@@ -328,6 +406,10 @@ public sealed class PalSaveDocument
             throw new ArgumentOutOfRangeException(nameof(category));
         }
 
+        if (roleId >= PalSaveLayout.RoleCount)
+        {
+            return unchecked((ushort)_customRoleState.GetRole(roleId).ExperienceWords[category * 2]);
+        }
         return ReadUInt16(PalSaveLayout.ExperienceValueOffset(category, roleId));
     }
 
@@ -337,7 +419,17 @@ public sealed class PalSaveDocument
         var count = applyToAllCategories ? PalSaveLayout.ExperienceCategoryCount : 1;
         for (var category = 0; category < count; category++)
         {
-            WriteUInt16(PalSaveLayout.ExperienceValueOffset(category, roleId), value);
+            if (roleId >= PalSaveLayout.RoleCount)
+            {
+                PalCustomRoleCurrentState role = _customRoleState.GetRole(roleId);
+                int index = category * 2;
+                role.ExperienceWords[index] =
+                    (role.ExperienceWords[index] & 0xFFFF0000u) | value;
+            }
+            else
+            {
+                WriteUInt16(PalSaveLayout.ExperienceValueOffset(category, roleId), value);
+            }
         }
     }
 
@@ -345,9 +437,14 @@ public sealed class PalSaveDocument
     {
         ValidateRole(roleId);
         var result = new List<MagicEntry>();
-        for (var slot = 0; slot < ExtendedRoleMagicState.CapacityPerRole; slot++)
+        int capacity = roleId < PalSaveLayout.RoleCount
+            ? ExtendedRoleMagicState.CapacityPerRole
+            : PalSaveLayout.MagicCapacity;
+        for (var slot = 0; slot < capacity; slot++)
         {
-            var id = _extendedMagics.Roles[roleId][slot];
+            ushort id = roleId < PalSaveLayout.RoleCount
+                ? _extendedMagics.Roles[roleId][slot]
+                : unchecked((ushort)_customRoleState.GetRole(roleId).Fields[32 + slot]);
             if (id != 0)
             {
                 result.Add(new(slot, id, Catalog?.GetObjectName(id) ?? $"法术 #{id}"));
@@ -363,6 +460,22 @@ public sealed class PalSaveDocument
         if (magicId == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(magicId));
+        }
+
+        if (roleId >= PalSaveLayout.RoleCount)
+        {
+            short[] fields = _customRoleState.GetRole(roleId).Fields;
+            if (Enumerable.Range(0, PalSaveLayout.MagicCapacity)
+                .Any(slot => unchecked((ushort)fields[32 + slot]) == magicId)) return;
+            for (int slot = 0; slot < PalSaveLayout.MagicCapacity; slot++)
+            {
+                if (fields[32 + slot] == 0)
+                {
+                    fields[32 + slot] = unchecked((short)magicId);
+                    return;
+                }
+            }
+            throw new InvalidOperationException("该自定义角色的 32 个物理法术槽已满。");
         }
 
         // Runtime script removals deliberately preserve their physical slot,
@@ -393,6 +506,19 @@ public sealed class PalSaveDocument
     public void RemoveMagic(int roleId, int magicSlot)
     {
         ValidateRole(roleId);
+        if (roleId >= PalSaveLayout.RoleCount)
+        {
+            if ((uint)magicSlot >= PalSaveLayout.MagicCapacity)
+                throw new ArgumentOutOfRangeException(nameof(magicSlot));
+            short[] fields = _customRoleState.GetRole(roleId).Fields;
+            var remaining = Enumerable.Range(0, PalSaveLayout.MagicCapacity)
+                .Where(slot => slot != magicSlot)
+                .Select(slot => fields[32 + slot])
+                .Where(value => value != 0).ToArray();
+            Array.Clear(fields, 32, PalSaveLayout.MagicCapacity);
+            Array.Copy(remaining, 0, fields, 32, remaining.Length);
+            return;
+        }
         if ((uint)magicSlot >= ExtendedRoleMagicState.CapacityPerRole)
         {
             throw new ArgumentOutOfRangeException(nameof(magicSlot));
@@ -419,13 +545,47 @@ public sealed class PalSaveDocument
         _extendedMagics.ProjectActivePage(_bytes);
     }
 
+    public void ReplaceMagics(int roleId, IEnumerable<ushort> magicIds)
+    {
+        ValidateRole(roleId);
+        if (magicIds is null)
+        {
+            throw new ArgumentNullException(nameof(magicIds));
+        }
+        ushort[] values = magicIds.Where(value => value != 0).Distinct().ToArray();
+        int capacity = roleId < PalSaveLayout.RoleCount
+            ? ExtendedRoleMagicState.CapacityPerRole
+            : PalSaveLayout.MagicCapacity;
+        if (values.Length > capacity)
+        {
+            throw new InvalidDataException(
+                $"法术数量超过 {capacity} 槽上限。");
+        }
+        if (roleId >= PalSaveLayout.RoleCount)
+        {
+            short[] fields = _customRoleState.GetRole(roleId).Fields;
+            Array.Clear(fields, 32, PalSaveLayout.MagicCapacity);
+            for (int index = 0; index < values.Length; index++)
+                fields[32 + index] = unchecked((short)values[index]);
+            return;
+        }
+        Array.Clear(
+            _extendedMagics.Roles[roleId],
+            0,
+            _extendedMagics.Roles[roleId].Length);
+        Array.Copy(values, _extendedMagics.Roles[roleId], values.Length);
+        _extendedMagics.ProjectActivePage(_bytes);
+    }
+
     public IReadOnlyList<EquipmentEntry> GetEquipment(int roleId)
     {
         ValidateRole(roleId);
         var result = new List<EquipmentEntry>(PalSaveLayout.EquipmentCount);
         for (var slot = 0; slot < PalSaveLayout.EquipmentCount; slot++)
         {
-            var itemId = ReadUInt16(PalSaveLayout.EquipmentOffset(slot, roleId));
+            ushort itemId = roleId < PalSaveLayout.RoleCount
+                ? ReadUInt16(PalSaveLayout.EquipmentOffset(slot, roleId))
+                : unchecked((ushort)_customRoleState.GetRole(roleId).Fields[11 + slot]);
             result.Add(new(slot, itemId, itemId == 0 ? "（无）" : Catalog?.GetObjectName(itemId) ?? $"物品 #{itemId}"));
         }
 
@@ -440,6 +600,11 @@ public sealed class PalSaveDocument
             throw new ArgumentOutOfRangeException(nameof(slot));
         }
 
+        if (roleId >= PalSaveLayout.RoleCount)
+        {
+            _customRoleState.GetRole(roleId).Fields[11 + slot] = unchecked((short)itemId);
+            return;
+        }
         WriteUInt16(PalSaveLayout.EquipmentOffset(slot, roleId), itemId);
     }
 
@@ -534,6 +699,13 @@ public sealed class PalSaveDocument
 
     public SaveWriteResult Save(string? targetPath = null, bool createBackup = true)
     {
+        if (!string.IsNullOrWhiteSpace(CustomRoleSaveStateWarning) &&
+            HasCustomRoleLibrary && CustomRoleLibrary.CustomRoles.Count != 0)
+        {
+            throw new InvalidOperationException(
+                "当前自定义人物存档 sidecar 与 RPG 或固定人物库身份不一致；请先检查、恢复或移开该 sidecar，编辑器不会用初始值覆盖它。");
+        }
+
         if (!string.IsNullOrWhiteSpace(ExtendedMagicSidecarWarning) &&
             _extendedMagics.HasExtendedPayload)
         {
@@ -611,6 +783,23 @@ public sealed class PalSaveDocument
                     : null;
             }
 
+            if (HasCustomRoleLibrary && CustomRoleLibrary.CustomRoles.Count != 0)
+            {
+                PalCustomRoleSaveStateStore.WriteAtomically(
+                    destination, persisted, CustomRoleLibrary,
+                    _customRoleState, createBackup);
+                HasCustomRoleSaveState = true;
+                CustomRoleSaveStateWarning = null;
+            }
+
+            if (!CustomRoleLibrary.ContentEquals(_originalCustomRoleLibrary))
+            {
+                PalCustomRoleLibraryStore.WriteAtomically(
+                    _customRoleGameDirectory, CustomRoleLibrary,
+                    createBackup, Catalog?.RuntimeObjectRecordCount);
+                HasCustomRoleLibrary = true;
+            }
+
             if (destinationExisted && !createBackup)
             {
                 File.Delete(rollbackPath!);
@@ -645,6 +834,8 @@ public sealed class PalSaveDocument
         Path = destination;
         Array.Copy(_bytes, _originalBytes, _bytes.Length);
         _originalExtendedMagics = _extendedMagics.Clone();
+        _originalCustomRoleState = _customRoleState.Clone();
+        _originalCustomRoleLibrary = CustomRoleLibrary.Clone();
 
         return new(destination, createBackup ? rollbackPath : null, _bytes.Length);
     }
@@ -756,13 +947,41 @@ public sealed class PalSaveDocument
     private void WriteUInt16(int offset, ushort value) => BinaryPrimitives.WriteUInt16LittleEndian(_bytes.AsSpan(offset, sizeof(ushort)), value);
     private void WriteUInt32(int offset, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(_bytes.AsSpan(offset, sizeof(uint)), value);
 
-    private static void ValidateRole(int roleId)
+    private void ValidateRole(int roleId)
     {
-        if ((uint)roleId >= PalSaveLayout.RoleCount)
+        if ((uint)roleId >= RuntimeRoleCount)
         {
             throw new ArgumentOutOfRangeException(nameof(roleId));
         }
     }
+
+    private static int RuntimeFieldIndex(RoleField field) => field switch
+    {
+        RoleField.Avatar => 0,
+        RoleField.BattleSprite => 1,
+        RoleField.MapSprite => 2,
+        RoleField.NameWordId => 3,
+        RoleField.AttackAll => 4,
+        RoleField.Level => 6,
+        RoleField.MaxHp => 7,
+        RoleField.MaxMp => 8,
+        RoleField.Hp => 9,
+        RoleField.Mp => 10,
+        RoleField.Attack => 17,
+        RoleField.MagicPower => 18,
+        RoleField.Defense => 19,
+        RoleField.Dexterity => 20,
+        RoleField.FleeRate => 21,
+        RoleField.PoisonResistance => 22,
+        RoleField.WindResistance => 23,
+        RoleField.ThunderResistance => 24,
+        RoleField.WaterResistance => 25,
+        RoleField.FireResistance => 26,
+        RoleField.EarthResistance => 27,
+        RoleField.WalkFrames => 64,
+        RoleField.CooperativeMagic => 65,
+        _ => throw new ArgumentOutOfRangeException(nameof(field), field, null),
+    };
 
     private static void ValidateInventorySlot(int slot)
     {

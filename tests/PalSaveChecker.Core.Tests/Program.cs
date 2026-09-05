@@ -14,6 +14,8 @@ Run("dynamic script state boundary", TestDynamicScriptBoundary);
 Run("empty contact trigger repair", TestEmptyContactTriggerRepair);
 Run("extended magic sidecar repair preserves recoverable slots", TestExtendedMagicSidecarRepair);
 Run("malformed extended magic sidecar falls back safely", TestMalformedExtendedMagicSidecarRepair);
+Run("custom role sidecar append preserves existing role", TestCustomRoleSidecarAppendRepair);
+Run("unsafe custom role sidecar is rejected", TestUnsafeCustomRoleSidecarRejected);
 Run("active profile stale learned magic ids are migrated", TestActiveProfileStaleRandomMagicRepair);
 Run("GBK config and Chinese patch name", TestGbkConfig);
 Run("invalid patch fails closed", TestInvalidPatchFailsClosed);
@@ -282,6 +284,178 @@ static void TestMalformedExtendedMagicSidecarRepair()
     Equal((ushort)321, restored.Roles[0][0], "physical page zero is retained");
     Equal((ushort)0, restored.Roles[0][32], "unrecoverable extra slots are cleared");
 }
+
+static void TestCustomRoleSidecarAppendRepair()
+{
+    using Fixture fixture = Fixture.Create();
+    string savePath = Path.Combine(fixture.Root, "1.RPG");
+    byte[] rpgBytes = File.ReadAllBytes(savePath);
+    var library = new PalCustomRoleLibrary
+    {
+        LibraryId = "test.custom-roles",
+        LibraryVersion = "1.0.0",
+    };
+    library.CustomRoles.Add(CreateCustomRole(6, "苗胖", 1, 160, 80, 33));
+    PalCustomRoleLibraryStore.WriteAtomically(
+        fixture.Root, library, createBackup: false, runtimeObjectCount: 600);
+
+    PalCustomRoleSaveState originalState = PalCustomRoleSaveState.CreateInitial(library);
+    originalState.GetRole(6).Fields[6] = 35;
+    originalState.GetRole(6).Fields[17] = 888;
+    originalState.GetRole(6).ExperienceWords[0] = 123_456;
+    PalCustomRoleSaveStateStore.WriteAtomically(
+        savePath, rpgBytes, library, originalState, createBackup: false);
+    string sidecarPath = PalCustomRoleSaveStateStore.GetPath(savePath);
+    byte[] oldSidecar = File.ReadAllBytes(sidecarPath);
+
+    library.CustomRoles.Add(CreateCustomRole(7, "鼻祖", 40, 500, 300, 444));
+    PalCustomRoleLibraryStore.WriteAtomically(
+        fixture.Root, library, createBackup: false, runtimeObjectCount: 600);
+
+    var service = new SaveCompatibilityService();
+    SaveCheckReport before = service.Check(fixture.Root);
+    SaveCheckItem beforeItem = before.Saves[0];
+    Equal(SaveCheckStatus.Polluted, beforeItem.Status,
+        "safe trailing role append is detected");
+    Equal(true, beforeItem.Repairable,
+        "safe trailing role append is repairable");
+    Equal(true, beforeItem.CustomRoleSidecarIssue,
+        "custom role sidecar issue is classified");
+    Equal(true, beforeItem.CustomRoleSidecarRepairable,
+        "custom role sidecar issue is explicitly safe");
+    Contains(beforeItem.CustomRoleSidecarError, "苗胖",
+        "preserved role is named in the report");
+    Contains(beforeItem.CustomRoleSidecarError, "鼻祖",
+        "appended role is named in the report");
+
+    string rpgHash = HashFile(savePath);
+    SaveRepairReport repair = service.Repair(fixture.Root, keepBackup: true);
+    Equal(false, repair.HasFailures, "custom role sidecar repair succeeds");
+    SaveRepairItem repairedItem = repair.Results.Single(result => result.FileName == "1.RPG");
+    Equal(true, repairedItem.Success, "custom role sidecar repair result");
+    Equal(rpgHash, HashFile(savePath), "sidecar-only repair does not change RPG bytes");
+    Equal(true, File.Exists(repairedItem.BackupPath), "RPG backup exists");
+    string sidecarBackupPath = repairedItem.BackupPath + ".pal98-custom-roles.json";
+    Equal(true, File.Exists(sidecarBackupPath), "custom role sidecar backup exists");
+    SequenceEqual(oldSidecar, File.ReadAllBytes(sidecarBackupPath),
+        "custom role sidecar backup preserves original bytes");
+
+    byte[] repairedRpg = File.ReadAllBytes(savePath);
+    Equal(true, PalCustomRoleSaveStateStore.TryLoad(
+        savePath,
+        repairedRpg,
+        library,
+        out PalCustomRoleSaveState repairedState,
+        out string? warning,
+        out bool requiresReconciliation,
+        out int storedRoleCount),
+        "repaired custom role sidecar loads");
+    Equal<string?>(null, warning, "repaired custom role sidecar warning");
+    Equal(false, requiresReconciliation,
+        "repaired custom role sidecar exactly matches the fixed library");
+    Equal(2, storedRoleCount, "repaired custom role count");
+    Equal((short)35, repairedState.GetRole(6).Fields[6],
+        "苗胖 level is preserved");
+    Equal((short)888, repairedState.GetRole(6).Fields[17],
+        "苗胖 attack is preserved");
+    Equal((uint)123_456, repairedState.GetRole(6).ExperienceWords[0],
+        "苗胖 experience is preserved");
+    Equal((short)40, repairedState.GetRole(7).Fields[6],
+        "鼻祖 receives the fixed initial level");
+    Equal((short)444, repairedState.GetRole(7).Fields[17],
+        "鼻祖 receives the fixed initial attack");
+    Equal(SaveCheckStatus.Clean, repair.After.Saves[0].Status,
+        "repaired sidecar passes a full reread");
+
+    library.CustomRoles.RemoveAt(1);
+    PalCustomRoleLibraryStore.WriteAtomically(
+        fixture.Root, library, createBackup: false, runtimeObjectCount: 600);
+    SaveCheckReport removal = service.Check(fixture.Root);
+    Equal(true, removal.Saves[0].CustomRoleSidecarRepairable,
+        "safe trailing role removal is repairable");
+    SaveRepairReport removalRepair = service.Repair(fixture.Root, keepBackup: false);
+    Equal(false, removalRepair.HasFailures,
+        "safe trailing role removal repair succeeds");
+    byte[] removalRpg = File.ReadAllBytes(savePath);
+    Equal(true, PalCustomRoleSaveStateStore.TryLoad(
+        savePath,
+        removalRpg,
+        library,
+        out PalCustomRoleSaveState contractedState,
+        out _,
+        out bool removalNeedsReconciliation,
+        out int contractedRoleCount),
+        "contracted custom role sidecar loads");
+    Equal(false, removalNeedsReconciliation,
+        "contracted custom role sidecar exactly matches the fixed library");
+    Equal(1, contractedRoleCount, "trailing custom role state is removed");
+    Equal((short)35, contractedState.GetRole(6).Fields[6],
+        "苗胖 survives trailing role removal");
+}
+
+static void TestUnsafeCustomRoleSidecarRejected()
+{
+    using Fixture fixture = Fixture.Create();
+    string savePath = Path.Combine(fixture.Root, "1.RPG");
+    byte[] rpgBytes = File.ReadAllBytes(savePath);
+    var library = new PalCustomRoleLibrary
+    {
+        LibraryId = "test.custom-roles",
+        LibraryVersion = "1.0.0",
+    };
+    library.CustomRoles.Add(CreateCustomRole(6, "苗胖", 1, 160, 80, 33));
+    PalCustomRoleLibraryStore.WriteAtomically(
+        fixture.Root, library, createBackup: false, runtimeObjectCount: 600);
+    PalCustomRoleSaveState state = PalCustomRoleSaveState.CreateInitial(library);
+    PalCustomRoleSaveStateStore.WriteAtomically(
+        savePath, rpgBytes, library, state, createBackup: false);
+    string sidecarPath = PalCustomRoleSaveStateStore.GetPath(savePath);
+    string malformed = File.ReadAllText(sidecarPath)
+        .Replace("\"role_id\": 6", "\"role_id\": 7");
+    File.WriteAllText(sidecarPath, malformed, new UTF8Encoding(false));
+    byte[] beforeSidecar = File.ReadAllBytes(sidecarPath);
+
+    var service = new SaveCompatibilityService();
+    SaveCheckReport before = service.Check(fixture.Root);
+    SaveCheckItem item = before.Saves[0];
+    Equal(SaveCheckStatus.Unreadable, item.Status,
+        "reordered custom role sidecar fails closed");
+    Equal(false, item.Repairable,
+        "reordered custom role sidecar is not repairable");
+    Equal(true, item.CustomRoleSidecarIssue,
+        "unsafe custom role sidecar issue is classified");
+    Equal(false, before.CanRepair,
+        "unsafe custom role sidecar does not enable repair");
+
+    SaveRepairReport repair = service.Repair(fixture.Root, keepBackup: true);
+    Equal(true, repair.HasFailures, "unsafe custom role sidecar remains blocked");
+    SequenceEqual(rpgBytes, File.ReadAllBytes(savePath), "blocked repair leaves RPG untouched");
+    SequenceEqual(beforeSidecar, File.ReadAllBytes(sidecarPath),
+        "blocked repair leaves custom role sidecar untouched");
+}
+
+static PalCustomRoleDefinition CreateCustomRole(
+    int roleId,
+    string name,
+    ushort level,
+    short maxHp,
+    short maxMp,
+    short attack) => new()
+{
+    RoleId = roleId,
+    DisplayName = name,
+    MapSprite = 12,
+    BattleSprite = 12,
+    Avatar = 1,
+    WalkFrames = 3,
+    InitialState = new PalCustomRoleStats
+    {
+        Level = level,
+        MaxHp = maxHp,
+        MaxMp = maxMp,
+        Attack = attack,
+    },
+};
 
 static void TestActiveProfileStaleRandomMagicRepair()
 {

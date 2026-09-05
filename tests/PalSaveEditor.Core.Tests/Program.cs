@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using PalSaveEditor.Core;
 
@@ -9,6 +10,7 @@ var tests = new (string Name, Action Run)[]
     ("layout constants", TestLayoutConstants),
     ("known format detection", TestKnownFormatDetection),
     ("synthetic field round trip", TestSyntheticFieldRoundTrip),
+    ("variable custom-role library round trip", TestCustomRoleLibrary),
     ("party and follower shared queue round trip", TestPartyAndFollowers),
     ("inventory compression and duplicate guard", TestInventory),
     ("999-slot magic sidecar round trip and binding guard", TestExtendedMagicSidecar),
@@ -65,6 +67,174 @@ static void TestLayoutConstants()
     Equal(892, PalSaveLayout.MagicOffset(0, 0), "magic offset");
 }
 
+static void TestCustomRoleLibrary()
+{
+    string directory = CreateTestDirectory();
+    try
+    {
+        var library = new PalCustomRoleLibrary
+        {
+            LibraryId = "local.test-heroes",
+            LibraryVersion = "1.2.3",
+        };
+        library.NativeRoleNames.Add(0, "逍遥");
+        library.CustomRoles.Add(new PalCustomRoleDefinition
+        {
+            RoleId = 6,
+            DisplayName = "苗胖",
+            MapSprite = 12,
+            BattleSprite = 77,
+            Avatar = 88,
+            WalkFrames = 3,
+            CooperativeMagic = 333,
+            AttackAll = 1,
+            InitialState = new PalCustomRoleStats
+            {
+                Level = 10,
+                MaxHp = 520,
+                MaxMp = 310,
+                Attack = 81,
+                MagicPower = 92,
+                Defense = 73,
+                Dexterity = 64,
+                FleeRate = 55,
+                PoisonResistance = -4,
+                WindResistance = 5,
+                ThunderResistance = 6,
+                WaterResistance = 7,
+                FireResistance = 8,
+                EarthResistance = 9,
+            },
+            GrowthPerLevel = new PalCustomRoleGrowth
+            {
+                MaxHp = 12,
+                MaxMp = 9,
+                Attack = 5,
+                MagicPower = 6,
+                Defense = 3,
+                Dexterity = 4,
+                FleeRate = 2,
+                PoisonResistance = 1,
+            },
+        });
+        library.CustomRoles[0].LearnedMagics.Add(new(1, 0x0127));
+        library.CustomRoles[0].LearnedMagics.Add(new(12, 0x0128));
+
+        library.CustomRoles.Add(new PalCustomRoleDefinition
+        {
+            RoleId = 7,
+            DisplayName = "阿七",
+            MapSprite = 12,
+            InitialState = new PalCustomRoleStats { Level = 1, MaxHp = 100, MaxMp = 50 },
+        });
+
+        PalCustomRoleLibraryWriteResult first = PalCustomRoleLibraryStore.WriteAtomically(
+            directory, library, createBackup: true);
+        True(File.Exists(first.Path), "custom role library created");
+        True(first.BackupPath is null, "first library write needs no backup");
+        True(PalCustomRoleLibraryStore.TryLoad(directory, out PalCustomRoleLibrary loaded, out string? error),
+            error ?? "custom role library loaded");
+        Equal(8, loaded.RuntimeRoleCount, "six native plus two custom roles");
+        Equal("苗胖", loaded.CustomRoles[0].DisplayName, "first new physical role name");
+        Equal(6, loaded.CustomRoles[0].RoleId, "first new role is not role 5");
+        Equal(7, loaded.CustomRoles[1].RoleId, "second new role remains independently addressable");
+        Equal((ushort)12, loaded.CustomRoles[0].MapSprite, "Tian Gui Huang test MGO");
+        Equal((ushort)12, loaded.CustomRoles[0].LearnedMagics[1].Level, "learned magic level");
+
+        PalCustomRoleLibraryWriteResult second = PalCustomRoleLibraryStore.WriteAtomically(
+            directory, loaded, createBackup: true);
+        NotNull(second.BackupPath, "overwrite backup path");
+        True(File.Exists(second.BackupPath!), "overwrite backup exists");
+
+        string savePath = Path.Combine(directory, "1.RPG");
+        File.WriteAllBytes(savePath, new byte[SaveFormatDetector.KnownPal98Length]);
+        PalSaveDocument save = PalSaveDocument.Load(savePath, SaveFormat.PalWin95);
+        True(save.HasCustomRoleLibrary, "save editor discovers fixed role library");
+        Equal(8, save.RuntimeRoleCount, "save exposes every native and custom role");
+        Equal("苗胖", save.GetRole(6).DisplayName, "custom role name comes from fixed library");
+        Equal((ushort)520, save.GetRoleField(6, RoleField.MaxHp), "custom initial HP");
+        Equal((short)-4, save.GetRoleSignedField(6, RoleField.PoisonResistance), "custom hidden poison resistance");
+        Equal((ushort)12, save.GetRoleField(6, RoleField.MapSprite), "custom Tian Gui Huang MGO");
+        Equal(1, save.GetMagics(6).Count, "only skills learned by initial level are initialized");
+        save.SetRoleField(6, RoleField.Level, 18);
+        save.SetRoleField(6, RoleField.Attack, 222);
+        save.SetExperience(6, 4321, applyToAllCategories: true);
+        save.AddMagic(6, 0x0130);
+        save.SetParty([0, 6, 7]);
+        save.Save(createBackup: false);
+        True(File.Exists(PalCustomRoleSaveStateStore.GetPath(savePath)),
+            "custom role state sidecar is written beside RPG");
+
+        PalSaveDocument reloadedSave = PalSaveDocument.Load(savePath, SaveFormat.PalWin95);
+        True(reloadedSave.HasCustomRoleSaveState, "bound custom role state reloads");
+        Equal((ushort)18, reloadedSave.GetRoleField(6, RoleField.Level), "custom level round trip");
+        Equal((ushort)222, reloadedSave.GetRoleField(6, RoleField.Attack), "custom attack round trip");
+        Equal((ushort)4321, reloadedSave.GetExperience(6, 7), "custom experience categories round trip");
+        Equal(2, reloadedSave.GetMagics(6).Count, "custom learned skills round trip");
+        Equal((ushort)6, reloadedSave.GetParty()[1].RoleId, "party can select role 6");
+        Equal((ushort)7, reloadedSave.GetParty()[2].RoleId, "party can select role 7");
+
+        loaded.CustomRoles.Add(new PalCustomRoleDefinition
+        {
+            RoleId = 8,
+            DisplayName = "阿八",
+            InitialState = new PalCustomRoleStats { Level = 3, MaxHp = 222, MaxMp = 66 },
+        });
+        PalCustomRoleLibraryStore.WriteAtomically(directory, loaded, createBackup: false);
+        PalSaveDocument expanded = PalSaveDocument.Load(savePath, SaveFormat.PalWin95);
+        True(expanded.HasCustomRoleSaveState,
+            "appending a consecutive fixed-library role reconciles the bound sidecar");
+        Equal((ushort)222, expanded.GetRoleField(6, RoleField.Attack),
+            "appending a role preserves existing custom-role state");
+        Equal((ushort)222, expanded.GetRoleField(8, RoleField.MaxHp),
+            "appended role starts from its fixed-library initial state");
+        expanded.Save(createBackup: false);
+
+        loaded.CustomRoles.RemoveAt(2);
+        PalCustomRoleLibraryStore.WriteAtomically(directory, loaded, createBackup: false);
+        PalSaveDocument contracted = PalSaveDocument.Load(savePath, SaveFormat.PalWin95);
+        True(contracted.HasCustomRoleSaveState,
+            "removing only the trailing fixed-library role reconciles the bound sidecar");
+        Equal((ushort)222, contracted.GetRoleField(6, RoleField.Attack),
+            "trailing-role removal preserves the remaining custom-role state");
+        contracted.Save(createBackup: false);
+        using (JsonDocument contractedSidecar = JsonDocument.Parse(
+                   File.ReadAllBytes(PalCustomRoleSaveStateStore.GetPath(savePath))))
+        {
+            Equal(2, contractedSidecar.RootElement.GetProperty("roles").GetArrayLength(),
+                "reconciled sidecar persists the current fixed-library role count");
+        }
+
+        byte[] tamperedSave = File.ReadAllBytes(savePath);
+        tamperedSave[PalSaveLayout.CashOffset] ^= 1;
+        File.WriteAllBytes(savePath, tamperedSave);
+        PalSaveDocument rejectedState = PalSaveDocument.Load(savePath, SaveFormat.PalWin95);
+        True(!rejectedState.HasCustomRoleSaveState, "RPG hash mismatch rejects custom role state");
+        True(!string.IsNullOrWhiteSpace(rejectedState.CustomRoleSaveStateWarning),
+            "custom role state rejection is visible");
+        Equal((ushort)10, rejectedState.GetRoleField(6, RoleField.Level),
+            "rejected state falls back to fixed-library initial level");
+        Throws<InvalidOperationException>(
+            () => rejectedState.Save(createBackup: false),
+            "editor refuses to overwrite rejected custom-role state with initial values");
+
+        loaded.CustomRoles[0].DisplayName = "六个汉字名字";
+        Throws<InvalidDataException>(
+            () => loaded.Validate(),
+            "reject role name wider than one CP936 WORD record");
+
+        loaded.CustomRoles[0].DisplayName = "苗胖";
+        loaded.CustomRoles[1].RoleId = 9;
+        Throws<InvalidDataException>(
+            () => loaded.Validate(),
+            "reject unstable gaps in custom role ids");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
 static void TestPartyAndFollowers()
 {
     var directory = CreateTestDirectory();
@@ -94,7 +264,7 @@ static void TestPartyAndFollowers()
         AssertQueueMarker(document.ToArray(), 4, 0xB0, "second follower record preserved");
 
         var beforeRejectedChange = document.ToArray();
-        Throws<InvalidDataException>(() => document.SetParty([0, 1, 2, 3]), "reject party plus follower overflow");
+        Throws<ArgumentOutOfRangeException>(() => document.SetParty([0, 1, 2, 3]), "reject four-person party until battle support is enabled");
         SequenceEqual(beforeRejectedChange, document.ToArray(), "overflow rejection is atomic");
 
         document.SetFollowers([81, 12]);
@@ -744,6 +914,20 @@ static void TestHunqianActiveProfileLayout()
             "}";
         File.WriteAllText(Path.Combine(profiles, "current.json"), pointer, new UTF8Encoding(false));
 
+        var fixedRoleLibrary = new PalCustomRoleLibrary
+        {
+            LibraryId = "local.active-profile-test",
+            LibraryVersion = "1.0.0",
+        };
+        fixedRoleLibrary.CustomRoles.Add(new PalCustomRoleDefinition
+        {
+            RoleId = 6,
+            DisplayName = "苗胖",
+            InitialState = new PalCustomRoleStats { Level = 1, MaxHp = 160, MaxMp = 80 },
+        });
+        string fixedRoleLibraryPath = PalCustomRoleLibraryStore.WriteAtomically(
+            directory, fixedRoleLibrary, createBackup: false).Path;
+
         string compatiblePath = Path.Combine(directory, "1.RPG");
         var compatible = new byte[PalSaveLayout.WinEventObjectOffset + eventBytes];
         FillTail(compatible, PalSaveLayout.WinEventObjectOffset);
@@ -761,12 +945,25 @@ static void TestHunqianActiveProfileLayout()
         Equal(PalSaveLayout.WinObjectRecordSize, document.Catalog.ObjectRecordSize, "Hunqian object width");
         True(document.Detection.Reason.IndexOf("5,332", StringComparison.Ordinal) >= 0,
             "Hunqian event count evidence");
+        True(document.HasCustomRoleLibrary,
+            "active profile still discovers the game-owned fixed role library");
+        Equal(fixedRoleLibraryPath, document.CustomRoleLibraryPath,
+            "custom-role library remains rooted at the game directory");
+        Equal("苗胖", document.GetRole(6).DisplayName,
+            "active profile shares the fixed custom-role namespace");
 
         byte[] eventTail = document.ToArray().AsSpan(PalSaveLayout.WinEventObjectOffset).ToArray();
         document.Cash = 167;
+        document.SetRoleDisplayName(0, "根目录名");
         document.Save(createBackup: false);
         PalSaveDocument roundTrip = PalSaveDocument.Load(compatiblePath, gameDirectory: directory);
         Equal((uint)167, roundTrip.Cash, "Hunqian field round trip");
+        Equal("根目录名", roundTrip.GetRole(0).DisplayName,
+            "active-profile role edit persists to the game-owned library");
+        True(roundTrip.HasCustomRoleSaveState,
+            "active-profile custom-role state round trips beside the RPG");
+        True(!File.Exists(Path.Combine(resources, "palmod", "CustomRoles", "roles.json")),
+            "editor never creates a shadow role library under staged profile resources");
         SequenceEqual(eventTail, roundTrip.ToArray().AsSpan(PalSaveLayout.WinEventObjectOffset),
             "Hunqian opaque event state preserved");
         Equal(PalSaveLayout.WinEventObjectOffset + eventBytes, roundTrip.Length, "Hunqian length preserved");

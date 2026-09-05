@@ -1,0 +1,65 @@
+{
+  "schema": "PAL98.CustomRoleLibrary.v1",
+  "library_id": "pal98.custom-roles.default",
+  "library_version": "1.0.0",
+  "runtime_min_version": "1.6.2.0",
+  "content_scope": "all-effective-content-profiles",
+  "native_role_names": [],
+  "custom_roles": [
+    {
+      "role_id": 6,
+      "display_name": "苗胖",
+      "map_sprite": 12,
+      "battle_sprite": 5,
+      "avatar": 5,
+      "walk_frames": 3,
+      "cooperative_magic": 386,
+      "attack_all": 0,
+      "initial_state": {
+        "level": 1,
+        "max_hp": 160,
+        "max_mp": 80,
+        "attack": 35,
+        "magic_power": 25,
+        "defense": 30,
+        "dexterity": 25,
+        "flee_rate": 20,
+        "poison_resistance": 10,
+        "wind_resistance": 0,
+        "thunder_resistance": 0,
+        "water_resistance": 0,
+        "fire_resistance": 0,
+        "earth_resistance": 0
+      },
+      "growth_per_level": {
+        "max_hp": 12,
+        "max_mp": 8,
+        "attack": 4,
+        "magic_power": 3,
+        "defense": 3,
+        "dexterity": 3,
+        "flee_rate": 2,
+        "poison_resistance": 1,
+        "wind_resistance": 0,
+        "thunder_resistance": 0,
+        "water_resistance": 0,
+        "fire_resistance": 0,
+        "earth_resistance": 0
+      },
+      "learned_magics": [
+        { "level": 1, "object_id": 296 },
+        { "level": 1, "object_id": 360 },
+        { "level": 5, "object_id": 345 },
+        { "level": 8, "object_id": 353 },
+        { "level": 12, "object_id": 311 },
+        { "level": 16, "object_id": 346 },
+        { "level": 20, "object_id": 354 },
+        { "level": 24, "object_id": 347 },
+        { "level": 30, "object_id": 372 },
+        { "level": 36, "object_id": 348 },
+        { "level": 42, "object_id": 351 },
+        { "level": 50, "object_id": 363 }
+      ]
+    }
+  ]
+}

@@ -227,10 +227,14 @@ internal sealed class MainForm : Form
             {
                 text.Append("        已学仙术：").AppendLine(item.LearnedMagicProfileError);
             }
+            if (!string.IsNullOrWhiteSpace(item.CustomRoleSidecarError))
+            {
+                text.Append("        自定义主角：").AppendLine(item.CustomRoleSidecarError);
+            }
         }
 
         text.AppendLine();
-        text.AppendLine("说明：先核对 active profile/补丁对应的存档总长度和事件记录数，再比较应稳定的对象定义、验证会随剧情推进的脚本索引，并检查启用中的接触触发对象是否指向空入口。已学仙术会按同一 Profile 历史 CONTENT.CATALOG 的 logical_id 迁移到当前对象号；只有已证明没有当前等价项或已经越出当前对象表的对象号才会移除，无法证明的表内对象号会保留。扩展法术槽 sidecar 仍会校验对应 RPG 的大小和 SHA-256；不含原生 32 槽之外数据的旧绑定会静默忽略，含额外槽、非零活动页或随机等级技能进度时仍会报告并保留给修复工具；结构损坏时只能从 RPG 恢复原生 32 槽。修复空入口时只把该事件对象的触发方式置 0，不用初始 SSS 事件表覆盖剧情状态。 ");
+        text.AppendLine("说明：先核对 active profile/补丁对应的存档总长度和事件记录数，再比较应稳定的对象定义、验证会随剧情推进的脚本索引，并检查启用中的接触触发对象是否指向空入口。已学仙术会按同一 Profile 历史 CONTENT.CATALOG 的 logical_id 迁移到当前对象号；只有已证明没有当前等价项或已经越出当前对象表的对象号才会移除，无法证明的表内对象号会保留。扩展法术槽 sidecar 仍会校验对应 RPG 的大小和 SHA-256；不含原生 32 槽之外数据的旧绑定会静默忽略，含额外槽、非零活动页或随机等级技能进度时仍会报告并保留给修复工具；结构损坏时只能从 RPG 恢复原生 32 槽。自定义主角 sidecar 只允许按角色 6 起的连续尾部增删合同修复：共同前缀状态原样保留，新增尾部角色按固定角色库初始值补入；RPG 哈希、库身份、角色重排或稀疏编号不符时拒绝自动覆盖。修复空入口时只把该事件对象的触发方式置 0，不用初始 SSS 事件表覆盖剧情状态。 ");
         return text.ToString();
     }
 }

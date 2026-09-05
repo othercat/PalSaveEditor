@@ -25,7 +25,10 @@ public sealed record SaveCheckItem(
     bool ExtendedMagicSidecarIssue = false,
     string? ExtendedMagicSidecarError = null,
     bool LearnedMagicProfileIssue = false,
-    string? LearnedMagicProfileError = null);
+    string? LearnedMagicProfileError = null,
+    bool CustomRoleSidecarIssue = false,
+    bool CustomRoleSidecarRepairable = false,
+    string? CustomRoleSidecarError = null);
 
 public sealed record SaveCheckReport(
     string GameRoot,
@@ -33,7 +36,7 @@ public sealed record SaveCheckReport(
     string? ReferenceError,
     IReadOnlyList<SaveCheckItem> Saves)
 {
-    public bool CanRepair => ReferenceError is null && Saves.Any(item => item.Status == SaveCheckStatus.Polluted);
+    public bool CanRepair => ReferenceError is null && Saves.Any(item => item.Repairable);
     public bool HasProblems => ReferenceError is not null || Saves.Any(item =>
         item.Status is SaveCheckStatus.Polluted or SaveCheckStatus.Incompatible or SaveCheckStatus.Unreadable);
 }
@@ -123,12 +126,43 @@ public sealed class SaveCompatibilityService
             try
             {
                 byte[] original = ReadAllBytesShared(savePath);
-                string sidecarPath = ExtendedRoleMagicSidecar.GetPath(savePath);
-                bool sidecarExists = File.Exists(sidecarPath);
+                string extendedMagicSidecarPath = ExtendedRoleMagicSidecar.GetPath(savePath);
+                bool extendedMagicSidecarExists = File.Exists(extendedMagicSidecarPath);
                 ExtendedRoleMagicSidecar.TryLoadRecoverable(
                     savePath, original, out var extendedMagics, out var sidecarWarning);
-                bool persistSidecar = sidecarExists &&
+                bool persistExtendedMagicSidecar = extendedMagicSidecarExists &&
                     (sidecarWarning is not null || extendedMagics.HasExtendedPayload);
+
+                string customRoleSidecarPath = PalCustomRoleSaveStateStore.GetPath(savePath);
+                bool customRoleSidecarExists = File.Exists(customRoleSidecarPath);
+                PalCustomRoleLibrary? customRoleLibrary = null;
+                PalCustomRoleSaveState? customRoleState = null;
+                bool persistCustomRoleSidecar = false;
+                if (customRoleSidecarExists)
+                {
+                    if (!PalCustomRoleLibraryStore.TryLoad(
+                            fullRoot,
+                            out customRoleLibrary,
+                            out string? libraryError,
+                            reference!.ObjectCount))
+                    {
+                        throw new InvalidDataException(
+                            libraryError ?? "存在自定义主角 sidecar，但固定角色库不存在。");
+                    }
+                    if (!PalCustomRoleSaveStateStore.TryLoad(
+                            savePath,
+                            original,
+                            customRoleLibrary,
+                            out customRoleState,
+                            out string? customRoleWarning,
+                            out _,
+                            out _))
+                    {
+                        throw new InvalidDataException(
+                            customRoleWarning ?? "自定义主角 sidecar 无法安全加载。");
+                    }
+                    persistCustomRoleSidecar = true;
+                }
                 LearnedMagicProfileMigrationResult? learnedMagicMigration = null;
                 string? inferredLearnedMagicProfileVersion = null;
                 if (reference!.Resources is not null &&
@@ -153,7 +187,7 @@ public sealed class SaveCompatibilityService
                 }
 
                 byte[] repaired = RepairBytes(original, reference!, analysis);
-                if (persistSidecar || learnedMagicMigration?.Changed == true)
+                if (persistExtendedMagicSidecar || learnedMagicMigration?.Changed == true)
                 {
                     extendedMagics.ProjectActivePage(repaired);
                 }
@@ -165,29 +199,66 @@ public sealed class SaveCompatibilityService
                 }
 
                 string rollbackPath = ReplaceWithRollback(savePath, repaired, keepBackup);
-                string? sidecarRollbackPath = null;
+                string? extendedMagicSidecarRollbackPath = null;
+                string? customRoleSidecarRollbackPath = null;
                 try
                 {
-                    if (persistSidecar)
+                    if (persistExtendedMagicSidecar)
                     {
-                        sidecarRollbackPath = keepBackup
+                        extendedMagicSidecarRollbackPath = keepBackup
                             ? rollbackPath + ExtendedRoleMagicState.Suffix
-                            : sidecarPath + $".{Guid.NewGuid():N}.rollback";
-                        File.Copy(sidecarPath, sidecarRollbackPath, overwrite: false);
+                            : extendedMagicSidecarPath + $".{Guid.NewGuid():N}.rollback";
+                        File.Copy(
+                            extendedMagicSidecarPath,
+                            extendedMagicSidecarRollbackPath,
+                            overwrite: false);
                         ExtendedRoleMagicSidecar.WriteAtomically(
                             savePath, repaired, extendedMagics);
+                    }
+                    if (persistCustomRoleSidecar)
+                    {
+                        customRoleSidecarRollbackPath = keepBackup
+                            ? rollbackPath + ".pal98-custom-roles.json"
+                            : customRoleSidecarPath + $".{Guid.NewGuid():N}.rollback";
+                        File.Copy(
+                            customRoleSidecarPath,
+                            customRoleSidecarRollbackPath,
+                            overwrite: false);
+                        PalCustomRoleSaveStateStore.WriteAtomically(
+                            savePath,
+                            repaired,
+                            customRoleLibrary!,
+                            customRoleState!,
+                            createBackup: false);
                     }
 
                     byte[] diskBytes = ReadAllBytesShared(savePath);
                     Analysis diskVerification = Analyze(diskBytes, reference!);
-                    bool sidecarVerified = !persistSidecar ||
+                    bool extendedMagicSidecarVerified = !persistExtendedMagicSidecar ||
                         ExtendedRoleMagicSidecar.TryLoad(
                             savePath, diskBytes, out _, out _);
-                    if (!diskVerification.IsClean || !sidecarVerified)
+                    bool customRoleSidecarVerified = !persistCustomRoleSidecar ||
+                        PalCustomRoleSaveStateStore.TryLoad(
+                            savePath,
+                            diskBytes,
+                            customRoleLibrary!,
+                            out _,
+                            out _,
+                            out bool requiresCustomRoleReconciliation,
+                            out _) &&
+                        !requiresCustomRoleReconciliation;
+                    if (!diskVerification.IsClean || !extendedMagicSidecarVerified ||
+                        !customRoleSidecarVerified)
                     {
                         RestoreRollback(rollbackPath, savePath, keepBackup);
                         RestoreSidecarRollback(
-                            sidecarRollbackPath, sidecarPath, keepBackup);
+                            extendedMagicSidecarRollbackPath,
+                            extendedMagicSidecarPath,
+                            keepBackup);
+                        RestoreSidecarRollback(
+                            customRoleSidecarRollbackPath,
+                            customRoleSidecarPath,
+                            keepBackup);
                         results.Add(new SaveRepairItem(
                             item.FileName,
                             false,
@@ -199,9 +270,13 @@ public sealed class SaveCompatibilityService
                     if (!keepBackup)
                     {
                         File.Delete(rollbackPath);
-                        if (sidecarRollbackPath is not null)
+                        if (extendedMagicSidecarRollbackPath is not null)
                         {
-                            File.Delete(sidecarRollbackPath);
+                            File.Delete(extendedMagicSidecarRollbackPath);
+                        }
+                        if (customRoleSidecarRollbackPath is not null)
+                        {
+                            File.Delete(customRoleSidecarRollbackPath);
                         }
                     }
 
@@ -217,14 +292,19 @@ public sealed class SaveCompatibilityService
                     }
                     string sidecarMessage = item.ExtendedMagicSidecarIssue
                         ? "；扩展法术槽 sidecar 已重新绑定，无法解析的额外槽会回退为 RPG 原生 32 槽"
-                        : persistSidecar
+                        : persistExtendedMagicSidecar
                             ? "；扩展法术槽 sidecar 已保留并重新绑定"
+                            : string.Empty;
+                    string customRoleMessage = item.CustomRoleSidecarIssue
+                        ? "；自定义主角 sidecar 已按新版合同补齐，已有角色状态已保留，新增尾部角色使用固定角色库初始值"
+                        : persistCustomRoleSidecar
+                            ? "；自定义主角 sidecar 已保留并重新绑定"
                             : string.Empty;
                     results.Add(new SaveRepairItem(
                         item.FileName,
                         true,
                         (keepBackup ? "修复完成并已创建备份" : "修复完成；未保留备份") +
-                        profileMagicMessage + sidecarMessage + "。",
+                        profileMagicMessage + sidecarMessage + customRoleMessage + "。",
                         keepBackup ? rollbackPath : null));
                 }
                 catch
@@ -234,7 +314,13 @@ public sealed class SaveCompatibilityService
                         RestoreRollback(rollbackPath, savePath, keepBackup);
                     }
                     RestoreSidecarRollback(
-                        sidecarRollbackPath, sidecarPath, keepBackup);
+                        extendedMagicSidecarRollbackPath,
+                        extendedMagicSidecarPath,
+                        keepBackup);
+                    RestoreSidecarRollback(
+                        customRoleSidecarRollbackPath,
+                        customRoleSidecarPath,
+                        keepBackup);
                     throw;
                 }
             }
@@ -268,6 +354,13 @@ public sealed class SaveCompatibilityService
     private static SaveCheckReport CheckWithReference(string root, ReferenceData reference, string description)
     {
         var saves = new List<SaveCheckItem>(5);
+        string customRoleLibraryPath = PalCustomRoleLibraryStore.GetPath(root);
+        bool customRoleLibraryExists = File.Exists(customRoleLibraryPath);
+        bool customRoleLibraryLoaded = PalCustomRoleLibraryStore.TryLoad(
+            root,
+            out PalCustomRoleLibrary customRoleLibrary,
+            out string? customRoleLibraryError,
+            reference.ObjectCount);
         for (int slot = 1; slot <= 5; slot++)
         {
             string fileName = $"{slot}.RPG";
@@ -317,11 +410,21 @@ public sealed class SaveCompatibilityService
                         }
                     }
                 }
+                CustomRoleSidecarInspection customRoleInspection =
+                    InspectCustomRoleSidecar(
+                        path,
+                        bytes,
+                        customRoleLibraryExists,
+                        customRoleLibraryLoaded,
+                        customRoleLibrary,
+                        customRoleLibraryError);
                 saves.Add(ToCheckItem(
                     fileName,
                     Analyze(bytes, reference),
                     sidecarIssue,
-                    learnedMagicIssue));
+                    learnedMagicIssue,
+                    customRoleInspection.Error,
+                    customRoleInspection.Repairable));
             }
             catch (Exception ex)
             {
@@ -352,7 +455,9 @@ public sealed class SaveCompatibilityService
         string fileName,
         Analysis analysis,
         string? extendedMagicSidecarIssue = null,
-        string? learnedMagicProfileIssue = null)
+        string? learnedMagicProfileIssue = null,
+        string? customRoleSidecarIssue = null,
+        bool customRoleSidecarRepairable = false)
     {
         if (!analysis.Repairable)
         {
@@ -366,10 +471,31 @@ public sealed class SaveCompatibilityService
                 analysis.DefinitionMismatchCount, analysis.InvalidScriptCount,
                 failureRisk, analysis.Error, analysis.EmptyContactTriggerCount,
                 LearnedMagicProfileIssue: learnedMagicProfileIssue is not null,
-                LearnedMagicProfileError: learnedMagicProfileIssue);
+                LearnedMagicProfileError: learnedMagicProfileIssue,
+                CustomRoleSidecarIssue: customRoleSidecarIssue is not null,
+                CustomRoleSidecarRepairable: customRoleSidecarRepairable,
+                CustomRoleSidecarError: customRoleSidecarIssue);
+        }
+        if (customRoleSidecarIssue is not null && !customRoleSidecarRepairable)
+        {
+            return new SaveCheckItem(
+                fileName,
+                SaveCheckStatus.Unreadable,
+                false,
+                analysis.DefinitionMismatchCount,
+                analysis.InvalidScriptCount,
+                "自定义主角 sidecar 与 RPG 或固定角色库身份不一致；自动覆盖可能丢失自定义角色进度。",
+                EmptyContactTriggerCount: analysis.EmptyContactTriggerCount,
+                ExtendedMagicSidecarIssue: extendedMagicSidecarIssue is not null,
+                ExtendedMagicSidecarError: extendedMagicSidecarIssue,
+                LearnedMagicProfileIssue: learnedMagicProfileIssue is not null,
+                LearnedMagicProfileError: learnedMagicProfileIssue,
+                CustomRoleSidecarIssue: true,
+                CustomRoleSidecarRepairable: false,
+                CustomRoleSidecarError: customRoleSidecarIssue);
         }
         if (analysis.IsClean && extendedMagicSidecarIssue is null &&
-            learnedMagicProfileIssue is null)
+            learnedMagicProfileIssue is null && customRoleSidecarIssue is null)
         {
             return new SaveCheckItem(fileName, SaveCheckStatus.Clean, false, 0, 0,
                 "未发现对象定义或脚本索引污染。 ");
@@ -377,6 +503,8 @@ public sealed class SaveCompatibilityService
 
         string risk = learnedMagicProfileIssue is not null
             ? "已学仙术对象号来自旧 Profile 或越出当前对象表；打开仙术菜单可能触发 Error 9。"
+            : customRoleSidecarIssue is not null
+            ? "固定角色库只连续增删了末尾角色；可保留共同前缀角色状态，并按固定初始值补入新增角色。"
             : extendedMagicSidecarIssue is not null
             ? "扩展法术槽 sidecar 与 RPG 不匹配或结构损坏；游戏会拒绝额外槽并退回原生 32 槽。"
             : analysis.EmptyContactTriggerCount > 0
@@ -390,7 +518,70 @@ public sealed class SaveCompatibilityService
             ExtendedMagicSidecarIssue: extendedMagicSidecarIssue is not null,
             ExtendedMagicSidecarError: extendedMagicSidecarIssue,
             LearnedMagicProfileIssue: learnedMagicProfileIssue is not null,
-            LearnedMagicProfileError: learnedMagicProfileIssue);
+            LearnedMagicProfileError: learnedMagicProfileIssue,
+            CustomRoleSidecarIssue: customRoleSidecarIssue is not null,
+            CustomRoleSidecarRepairable: customRoleSidecarRepairable,
+            CustomRoleSidecarError: customRoleSidecarIssue);
+    }
+
+    private static CustomRoleSidecarInspection InspectCustomRoleSidecar(
+        string savePath,
+        byte[] saveBytes,
+        bool libraryExists,
+        bool libraryLoaded,
+        PalCustomRoleLibrary library,
+        string? libraryError)
+    {
+        string sidecarPath = PalCustomRoleSaveStateStore.GetPath(savePath);
+        if (!File.Exists(sidecarPath))
+        {
+            return CustomRoleSidecarInspection.Clean;
+        }
+        if (!libraryExists)
+        {
+            return new(
+                "存在自定义主角 sidecar，但游戏目录缺少固定角色库 palmod/CustomRoles/roles.json。",
+                false);
+        }
+        if (!libraryLoaded)
+        {
+            return new(libraryError ?? "固定角色库无法读取。", false);
+        }
+        if (!PalCustomRoleSaveStateStore.TryLoad(
+                savePath,
+                saveBytes,
+                library,
+                out _,
+                out string? warning,
+                out bool requiresReconciliation,
+                out int storedRoleCount))
+        {
+            return new(warning ?? "自定义主角 sidecar 无法安全加载。", false);
+        }
+        if (!requiresReconciliation)
+        {
+            return CustomRoleSidecarInspection.Clean;
+        }
+
+        int currentRoleCount = library.CustomRoles.Count;
+        if (storedRoleCount < currentRoleCount)
+        {
+            string preserved = storedRoleCount == 0
+                ? "没有既有自定义角色状态需要迁移"
+                : "保留 " + string.Join("、", library.CustomRoles
+                    .Take(storedRoleCount)
+                    .Select(role => $"角色 {role.RoleId}“{role.DisplayName}”")) + " 的现有状态";
+            string appended = string.Join("、", library.CustomRoles
+                .Skip(storedRoleCount)
+                .Select(role => $"角色 {role.RoleId}“{role.DisplayName}”"));
+            return new(
+                $"sidecar 现有 {storedRoleCount} 名自定义角色，固定角色库现有 {currentRoleCount} 名；可{preserved}，并按固定初始值补入 {appended}。",
+                true);
+        }
+
+        return new(
+            $"sidecar 现有 {storedRoleCount} 名自定义角色，固定角色库现有 {currentRoleCount} 名；可保留前 {currentRoleCount} 名角色状态，并移除已经从固定角色库末尾删除的状态。",
+            true);
     }
 
     private static Analysis Analyze(byte[] saveBytes, ReferenceData reference)
@@ -815,6 +1006,11 @@ public sealed class SaveCompatibilityService
 
     private static ushort ReadUInt16(byte[] bytes, int offset) =>
         (ushort)(bytes[offset] | bytes[offset + 1] << 8);
+
+    private sealed record CustomRoleSidecarInspection(string? Error, bool Repairable)
+    {
+        public static readonly CustomRoleSidecarInspection Clean = new(null, false);
+    }
 
     private sealed record Analysis(
         int DefinitionMismatchCount,
