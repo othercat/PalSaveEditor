@@ -12,6 +12,7 @@ public sealed class PalSaveDocument
     private PalCustomRoleSaveState _originalCustomRoleState;
     private PalCustomRoleLibrary _originalCustomRoleLibrary;
     private readonly string _customRoleGameDirectory;
+    private bool _usesNativeMagicSlots;
 
     private PalSaveDocument(
         string path,
@@ -26,17 +27,26 @@ public sealed class PalSaveDocument
         Format = format;
         Detection = detection;
         Catalog = catalog;
+        string gameDirectory = catalog?.ResourceContext.GameDirectory
+            ?? System.IO.Path.GetDirectoryName(Path)
+            ?? Environment.CurrentDirectory;
+        _usesNativeMagicSlots = UsesNativeMagicSlots(gameDirectory, catalog);
         HasExtendedMagicSidecar = ExtendedRoleMagicSidecar.TryLoad(
             Path, _bytes, out _extendedMagics, out var sidecarWarning);
+        if (_usesNativeMagicSlots)
+        {
+            // v1.62 reads the RPG's 32 physical slots and does not activate the
+            // old paging sidecar. Do not turn that inactive file into authority.
+            _extendedMagics = ExtendedRoleMagicState.FromPhysicalPage0(_bytes);
+            HasExtendedMagicSidecar = false;
+            sidecarWarning = null;
+        }
         ExtendedMagicSidecarWarning = sidecarWarning;
         _originalExtendedMagics = _extendedMagics.Clone();
         // The active profile redirects WORD/SSS reads into its staged resources
         // directory, but the custom-role library is a game-owned fixed file.
         // Keep it rooted at the game directory so every effective profile shares
         // the same role namespace and PALDLL observes editor changes.
-        string gameDirectory = catalog?.ResourceContext.GameDirectory
-            ?? System.IO.Path.GetDirectoryName(Path)
-            ?? Environment.CurrentDirectory;
         _customRoleGameDirectory = gameDirectory;
         HasCustomRoleLibrary = PalCustomRoleLibraryStore.TryLoad(
             gameDirectory, out PalCustomRoleLibrary library,
@@ -78,7 +88,8 @@ public sealed class PalSaveDocument
     public int RuntimeRoleCount => CustomRoleLibrary.RuntimeRoleCount;
     public string CustomRoleLibraryPath =>
         PalCustomRoleLibraryStore.GetPath(_customRoleGameDirectory);
-    public int MagicCapacity => ExtendedRoleMagicState.CapacityPerRole;
+    public int MagicCapacity => _usesNativeMagicSlots
+        ? PalSaveLayout.MagicCapacity : ExtendedRoleMagicState.CapacityPerRole;
     public int ActiveMagicPage => _extendedMagics.ActivePage;
 
     public ushort SavedTimes { get => ReadUInt16(PalSaveLayout.SavedTimesOffset); set => WriteUInt16(PalSaveLayout.SavedTimesOffset, value); }
@@ -160,6 +171,13 @@ public sealed class PalSaveDocument
             catalog.EventObjectBytes);
         Catalog = catalog;
         Detection = detection;
+        _usesNativeMagicSlots = UsesNativeMagicSlots(catalog.ResourceContext.GameDirectory, catalog);
+        if (_usesNativeMagicSlots)
+        {
+            _extendedMagics = ExtendedRoleMagicState.FromPhysicalPage0(_bytes);
+            HasExtendedMagicSidecar = false;
+            ExtendedMagicSidecarWarning = null;
+        }
         if (detection.Format is SaveFormat.Dream220Dos or SaveFormat.Dream220Win95)
         {
             Format = detection.Format;
@@ -438,7 +456,7 @@ public sealed class PalSaveDocument
         ValidateRole(roleId);
         var result = new List<MagicEntry>();
         int capacity = roleId < PalSaveLayout.RoleCount
-            ? ExtendedRoleMagicState.CapacityPerRole
+            ? MagicCapacity
             : PalSaveLayout.MagicCapacity;
         for (var slot = 0; slot < capacity; slot++)
         {
@@ -482,7 +500,7 @@ public sealed class PalSaveDocument
         // so a valid 999-slot sidecar can contain holes before an existing
         // copy of the same magic.  Search the complete role table for the
         // duplicate before choosing the first empty slot.
-        for (var slot = 0; slot < ExtendedRoleMagicState.CapacityPerRole; slot++)
+        for (var slot = 0; slot < MagicCapacity; slot++)
         {
             if (_extendedMagics.Roles[roleId][slot] == magicId)
             {
@@ -490,7 +508,7 @@ public sealed class PalSaveDocument
             }
         }
 
-        for (var slot = 0; slot < ExtendedRoleMagicState.CapacityPerRole; slot++)
+        for (var slot = 0; slot < MagicCapacity; slot++)
         {
             if (_extendedMagics.Roles[roleId][slot] == 0)
             {
@@ -500,7 +518,7 @@ public sealed class PalSaveDocument
             }
         }
 
-        throw new InvalidOperationException("该角色的 999 个法术槽已满。");
+        throw new InvalidOperationException($"该角色的 {MagicCapacity} 个法术槽已满。");
     }
 
     public void RemoveMagic(int roleId, int magicSlot)
@@ -554,7 +572,7 @@ public sealed class PalSaveDocument
         }
         ushort[] values = magicIds.Where(value => value != 0).Distinct().ToArray();
         int capacity = roleId < PalSaveLayout.RoleCount
-            ? ExtendedRoleMagicState.CapacityPerRole
+            ? MagicCapacity
             : PalSaveLayout.MagicCapacity;
         if (values.Length > capacity)
         {
@@ -697,6 +715,16 @@ public sealed class PalSaveDocument
 
     public byte[] ToArray() => (byte[])_bytes.Clone();
 
+    public static bool UsesNativeMagicSlots(string gameDirectory, PalResourceCatalog? catalog)
+    {
+        if (catalog?.ResourceContext.GlobalSkillLibraryPath is not null) return true;
+        string dll = System.IO.Path.Combine(gameDirectory, "PAL.dll");
+        if (!File.Exists(dll)) return false;
+        var version = System.Diagnostics.FileVersionInfo.GetVersionInfo(dll);
+        return new Version(version.FileMajorPart, version.FileMinorPart,
+            version.FileBuildPart, Math.Max(0, version.FilePrivatePart)) >= new Version(1, 6, 2, 0);
+    }
+
     public SaveWriteResult Save(string? targetPath = null, bool createBackup = true)
     {
         if (!string.IsNullOrWhiteSpace(CustomRoleSaveStateWarning) &&
@@ -733,6 +761,11 @@ public sealed class PalSaveDocument
         var temporaryPath = System.IO.Path.Combine(
             directory,
             $".{System.IO.Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
+        var companions = new List<(string Path, byte[]? Before)>();
+        void RememberCompanion(string path) =>
+            companions.Add((path, File.Exists(path) ? File.ReadAllBytes(path) : null));
+        var previousSidecarStatus = (HasExtendedMagicSidecar, ExtendedMagicSidecarWarning,
+            HasCustomRoleSaveState, CustomRoleSaveStateWarning, HasCustomRoleLibrary);
 
         try
         {
@@ -761,6 +794,7 @@ public sealed class PalSaveDocument
             {
                 if (_extendedMagics.HasExtendedPayload)
                 {
+                    RememberCompanion(ExtendedRoleMagicSidecar.GetPath(destination));
                     ExtendedRoleMagicSidecar.WriteAtomically(
                         destination, persisted, _extendedMagics);
                     HasExtendedMagicSidecar = true;
@@ -785,6 +819,7 @@ public sealed class PalSaveDocument
 
             if (HasCustomRoleLibrary && CustomRoleLibrary.CustomRoles.Count != 0)
             {
+                RememberCompanion(PalCustomRoleSaveStateStore.GetPath(destination));
                 PalCustomRoleSaveStateStore.WriteAtomically(
                     destination, persisted, CustomRoleLibrary,
                     _customRoleState, createBackup);
@@ -794,6 +829,7 @@ public sealed class PalSaveDocument
 
             if (!CustomRoleLibrary.ContentEquals(_originalCustomRoleLibrary))
             {
+                RememberCompanion(PalCustomRoleLibraryStore.GetPath(_customRoleGameDirectory));
                 PalCustomRoleLibraryStore.WriteAtomically(
                     _customRoleGameDirectory, CustomRoleLibrary,
                     createBackup, Catalog?.RuntimeObjectRecordCount);
@@ -808,6 +844,22 @@ public sealed class PalSaveDocument
         }
         catch
         {
+            foreach (var companion in companions.AsEnumerable().Reverse())
+            {
+                if (companion.Before is null)
+                {
+                    if (File.Exists(companion.Path)) File.Delete(companion.Path);
+                    continue;
+                }
+                if (File.Exists(companion.Path) && File.ReadAllBytes(companion.Path)
+                    .AsSpan().SequenceEqual(companion.Before)) continue;
+                string restorePath = companion.Path + $".{Guid.NewGuid():N}.rollback";
+                File.WriteAllBytes(restorePath, companion.Before);
+                if (File.Exists(companion.Path)) File.Replace(restorePath, companion.Path, null);
+                else File.Move(restorePath, companion.Path);
+            }
+            (HasExtendedMagicSidecar, ExtendedMagicSidecarWarning,
+                HasCustomRoleSaveState, CustomRoleSaveStateWarning, HasCustomRoleLibrary) = previousSidecarStatus;
             if (rollbackPath is not null && File.Exists(rollbackPath))
             {
                 File.Copy(rollbackPath, destination, overwrite: true);

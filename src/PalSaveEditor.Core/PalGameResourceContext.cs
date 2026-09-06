@@ -21,6 +21,7 @@ public sealed record PalGameResourceContext(
     string? SkillObjectsPath)
 {
     public bool IsActiveProfile => !string.IsNullOrWhiteSpace(ProfileId);
+    public string? GlobalSkillLibraryPath { get; init; }
     public PalPublicToolProfile? PublicToolProfile =>
         PalPublicToolProfiles.Find(ProfileId, ProfileVersion);
 
@@ -110,6 +111,30 @@ public static class PalGameResourceContextResolver
             stagedDirectory,
             resourceSet,
             "SKILL.OBJECTS");
+        string? globalSkillsPath = ValidateOptionalResource(stagedDirectory, resourceSet, "SKILL.GLOBAL");
+        bool globalCapability = descriptor.TryGetProperty("required_runtime", out JsonElement runtime) &&
+            runtime.TryGetProperty("capabilities", out JsonElement capabilities) &&
+            capabilities.ValueKind == JsonValueKind.Array &&
+            capabilities.EnumerateArray().Any(c => c.ValueKind == JsonValueKind.String && c.GetString() == "global-skill-library.v1");
+        if (globalCapability != (globalSkillsPath is not null))
+            throw new InvalidDataException("全局技能库能力与资源不匹配。");
+        if (globalSkillsPath is not null)
+        {
+            using JsonDocument library = ParseJson(globalSkillsPath, "global skill library");
+            JsonElement root = library.RootElement;
+            RequireValue(root, "schema", globalSkillsPath, "PAL98.GlobalSkillLibrary.v1");
+            if (!root.TryGetProperty("first_object_id", out JsonElement first) || first.GetInt32() != 2048 ||
+                !root.TryGetProperty("maximum_object_count", out JsonElement maximum) || maximum.GetInt32() != 4096 ||
+                !root.TryGetProperty("entries", out JsonElement entries) || entries.ValueKind != JsonValueKind.Array ||
+                entries.GetArrayLength() is <= 0 or > 2048 || contentCatalogPath is null || skillObjectsPath is null)
+                throw new InvalidDataException("全局技能编号表或关联资源无效。");
+            int next = 2048;
+            var logicalIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (JsonElement entry in entries.EnumerateArray())
+                if (entry.GetProperty("object_id").GetInt32() != next++ ||
+                    !logicalIds.Add(RequireString(entry, "logical_id", globalSkillsPath)))
+                    throw new InvalidDataException("全局技能编号必须连续且代表技能不得重复。");
+        }
         string resourcesDirectory = Path.GetDirectoryName(wordPath)
             ?? throw new InvalidDataException("active profile WORD.DAT 没有有效父目录。");
         if (!string.Equals(resourcesDirectory, Path.GetDirectoryName(sssPath), StringComparison.OrdinalIgnoreCase))
@@ -126,7 +151,7 @@ public static class PalGameResourceContextResolver
             descriptorPath,
             descriptorSha256,
             contentCatalogPath,
-            skillObjectsPath);
+            skillObjectsPath) { GlobalSkillLibraryPath = globalSkillsPath };
     }
 
     private static string ValidateRequiredResource(

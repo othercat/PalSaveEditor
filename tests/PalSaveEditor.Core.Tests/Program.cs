@@ -14,6 +14,9 @@ var tests = new (string Name, Action Run)[]
     ("party and follower shared queue round trip", TestPartyAndFollowers),
     ("inventory compression and duplicate guard", TestInventory),
     ("999-slot magic sidecar round trip and binding guard", TestExtendedMagicSidecar),
+    ("v1.62 native roles use exactly 32 RPG magic slots", TestModernNativeMagicCapacity),
+    ("multi-file save rolls back RPG and companions on library write failure", TestCompanionRollback),
+    ("optional player profile and all sixteen roles round trip", TestOptionalPlayerFixture),
     ("native 32-slot stale sidecar is silent and not rewritten", TestNativeStaleSidecar),
     ("independent skill registry exposes all active-resource skills", TestSkillRegistry),
     ("active content catalog exposes composed extended skills", TestComposedContentCatalog),
@@ -313,6 +316,138 @@ static void TestKnownFormatDetection()
     {
         Directory.Delete(directory, recursive: true);
     }
+}
+
+static void TestOptionalPlayerFixture()
+{
+    string? root = Environment.GetEnvironmentVariable("PAL98_TOOLS_FIXTURE_GAME");
+    if (string.IsNullOrWhiteSpace(root))
+    {
+        Console.WriteLine("SKIP  PAL98_TOOLS_FIXTURE_GAME not set");
+        return;
+    }
+    string source = Path.Combine(root, "2.RPG");
+    string beforeHash = HashFile(source);
+    var resources = PalResourceCatalog.Load(root);
+    True(resources.IsActiveProfile, "the actual player descriptor is selected");
+    Equal("投掷", resources.GetWord(2048), "fixed skill 2048 has its global display name");
+    Equal("梦蛇", resources.GetWord(2049), "fixed skill 2049 has its global display name");
+    var document = PalSaveDocument.Load(source, SaveFormat.Auto, root);
+    Equal(16, document.RuntimeRoleCount, "test library exposes roles 0..15");
+    Equal(32, document.MagicCapacity, "all native roles use physical RPG slots");
+    True(document.HasCustomRoleSaveState, document.CustomRoleSaveStateWarning ?? "custom snapshot binds");
+    var skills = Enumerable.Range(0, 16).Select(role =>
+        document.GetMagics(role).Select(x => x.MagicId).ToArray()).ToArray();
+    document.Cash = 4567;
+    document.SetRoleField(0, RoleField.Level, 41);
+    document.SetRoleField(6, RoleField.Level, 42);
+    string output = Path.Combine(root, "3.RPG");
+    document.Save(output, createBackup: true);
+    var loaded = PalSaveDocument.Load(output, SaveFormat.Auto, root);
+    Equal((ushort)41, loaded.GetRoleField(0, RoleField.Level), "native role edit survives");
+    Equal((ushort)42, loaded.GetRoleField(6, RoleField.Level), "extended role edit survives");
+    for (int role = 0; role < 16; role++)
+        True(skills[role].SequenceEqual(loaded.GetMagics(role).Select(x => x.MagicId)),
+            "skill IDs remain separate for role " + role);
+    var before = JsonNode.Parse(File.ReadAllText(PalCustomRoleSaveStateStore.GetPath(source)))!;
+    var after = JsonNode.Parse(File.ReadAllText(PalCustomRoleSaveStateStore.GetPath(output)))!;
+    before["save_file"] = "3.RPG";
+    before["rpg_sha256"] = after["rpg_sha256"]!.GetValue<string>();
+    before["roles"]![0]!["fields"]![6] = 42;
+    True(JsonNode.DeepEquals(before, after), "all ten extended role fields, experience and modifiers round trip");
+    Equal(beforeHash, HashFile(source), "Save As preserves the source RPG");
+    Console.WriteLine("PROFILE " + resources.ActiveProfileId + " @" + resources.ActiveProfileVersion +
+        "; runtime objects=" + resources.RuntimeObjectRecordCount + "; roles=16; skills preserved");
+}
+
+static void TestCompanionRollback()
+{
+    string directory = CreateTestDirectory();
+    try
+    {
+        var library = new PalCustomRoleLibrary();
+        library.CustomRoles.Add(new PalCustomRoleDefinition { RoleId = 6, DisplayName = "测试" });
+        string libraryPath = PalCustomRoleLibraryStore.WriteAtomically(directory, library, false).Path;
+        string path = Path.Combine(directory, "1.RPG");
+        File.WriteAllBytes(path, new byte[SaveFormatDetector.KnownPal98Length]);
+        var document = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        document.ReplaceMagics(0, Enumerable.Range(100, 40).Select(x => (ushort)x));
+        document.Save(createBackup: false);
+        var paths = new[] { path, ExtendedRoleMagicSidecar.GetPath(path),
+            PalCustomRoleSaveStateStore.GetPath(path), libraryPath };
+        var before = paths.ToDictionary(x => x, File.ReadAllBytes);
+        foreach (bool retainBackup in new[] { false, true })
+        {
+            document.Cash = 123;
+            document.SetRoleField(6, RoleField.Level, 20);
+            document.CustomRoleLibrary.CustomRoles[0].DisplayName = "修改";
+            bool failed = false;
+            // Allow reads but deny replacement of the last file in the save.
+            using (var locked = new FileStream(libraryPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                try { document.Save(createBackup: retainBackup); }
+                catch (IOException) { failed = true; }
+            }
+            True(failed, "locked library must reject the final write");
+            foreach (string file in paths)
+                True(before[file].SequenceEqual(File.ReadAllBytes(file)), "rollback preserves " + Path.GetFileName(file));
+            var loaded = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+            True(loaded.HasCustomRoleSaveState && loaded.HasExtendedMagicSidecar,
+                "rollback leaves both sidecars bound to the restored RPG");
+        }
+    }
+    finally { Directory.Delete(directory, recursive: true); }
+}
+
+static void TestModernNativeMagicCapacity()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        using (var compiler = new Microsoft.CSharp.CSharpCodeProvider())
+        {
+            var options = new System.CodeDom.Compiler.CompilerParameters
+            {
+                GenerateExecutable = false,
+                OutputAssembly = Path.Combine(directory, "PAL.dll"),
+            };
+            var result = compiler.CompileAssemblyFromSource(options,
+                "[assembly:System.Reflection.AssemblyFileVersion(\"1.6.2.0\")] public class RuntimeIdentityFixture {} ");
+            True(!result.Errors.HasErrors, "compile the version-only runtime fixture");
+        }
+        string path = Path.Combine(directory, "1.RPG");
+        File.WriteAllBytes(path, new byte[SaveFormatDetector.KnownPal98Length]);
+        var document = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        Equal(32, document.MagicCapacity, "v1.62 native slot capacity");
+        for (int role = 0; role < 6; role++)
+        {
+            document.ReplaceMagics(role, Enumerable.Range(2048 + role, 32).Select(x => (ushort)x));
+            bool rejected = false;
+            try { document.AddMagic(role, 2236); }
+            catch (InvalidOperationException) { rejected = true; }
+            True(rejected, "the 33rd magic is refused for native role " + role);
+        }
+        document.Save(createBackup: false);
+        byte[] saved = File.ReadAllBytes(path);
+        var legacy = ExtendedRoleMagicState.FromPhysicalPage0(saved);
+        legacy.Roles[0][40] = 2236;
+        ExtendedRoleMagicSidecar.WriteAtomically(path, saved, legacy);
+        string sidecarPath = ExtendedRoleMagicSidecar.GetPath(path);
+        string beforeSidecar = HashFile(sidecarPath);
+        document = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        True(!document.HasExtendedMagicSidecar, "inactive legacy sidecar is not authoritative in v1.62");
+        for (int role = 0; role < 6; role++)
+        {
+            Equal(32, document.GetMagics(role).Count, "all native roles keep their physical slots");
+            Equal((ushort)(2048 + role), document.GetMagics(role)[0].MagicId, "native role columns remain separate");
+        }
+        document.Cash = 123;
+        document.Save(createBackup: false);
+        Equal(beforeSidecar, HashFile(sidecarPath), "inactive legacy sidecar is preserved without rewriting");
+        var loaded = PalSaveDocument.Load(path, SaveFormat.PalWin95);
+        Equal(32, loaded.GetMagics(0).Count, "RPG physical skills reload after an ordinary edit");
+    }
+    finally { Directory.Delete(directory, recursive: true); }
 }
 
 static void TestExtendedMagicSidecar()

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Json;
 
 namespace PalSaveEditor.Core;
 
@@ -7,6 +8,7 @@ public sealed class PalResourceCatalog
 {
     private readonly string[] _words;
     private readonly ushort[]? _objectFlags;
+    private IReadOnlyDictionary<int, string> _globalSkillNames = new Dictionary<int, string>();
 
     private PalResourceCatalog(
         PalGameResourceContext resourceContext,
@@ -124,7 +126,8 @@ public sealed class PalResourceCatalog
             resourceContext.SkillObjectsPath,
             recordSize,
             objectRecordCount,
-            wordPayloadLength);
+            wordPayloadLength,
+            resourceContext.GlobalSkillLibraryPath is not null);
 
         // Original DOS resources (including Dream 2.20) use Big5, while the
         // mainland Win95 release uses GBK. The object-record width is the same
@@ -144,7 +147,7 @@ public sealed class PalResourceCatalog
             words[i] = wordEncoding.GetString(wordBytes, recordOffset, length).Trim();
         }
 
-        return new(
+        var result = new PalResourceCatalog(
             resourceContext,
             words,
             wordBytes.Length,
@@ -153,10 +156,26 @@ public sealed class PalResourceCatalog
             objectRecordCount,
             runtimeObjectRecordCount,
             eventObjectBytes);
+        if (resourceContext.GlobalSkillLibraryPath is not null)
+        {
+            using JsonDocument library = JsonDocument.Parse(File.ReadAllBytes(resourceContext.GlobalSkillLibraryPath));
+            var names = new Dictionary<int, string>();
+            foreach (JsonElement entry in library.RootElement.GetProperty("entries").EnumerateArray())
+            {
+                int id = entry.GetProperty("object_id").GetInt32();
+                string? name = entry.GetProperty("display_name").GetString();
+                if (id < 2048 || id >= runtimeObjectRecordCount || string.IsNullOrWhiteSpace(name) || names.ContainsKey(id))
+                    throw new InvalidDataException("固定技能名称或编号无效。");
+                names.Add(id, name!);
+            }
+            result._globalSkillNames = names;
+        }
+        return result;
     }
 
     public string GetWord(int id, string fallbackPrefix = "对象")
     {
+        if (_globalSkillNames.TryGetValue(id, out string? name)) return name;
         if ((uint)id < (uint)_words.Length && !string.IsNullOrWhiteSpace(_words[id]))
         {
             return _words[id];
@@ -250,7 +269,8 @@ public sealed class PalResourceCatalog
         string? skillObjectsPath,
         int objectRecordSize,
         int baseObjectCount,
-        int baseWordBytes)
+        int baseWordBytes,
+        bool globalSkills)
     {
         if (string.IsNullOrWhiteSpace(skillObjectsPath))
         {
@@ -299,6 +319,12 @@ public sealed class PalResourceCatalog
         for (int index = 0; index < extensionCount; index++)
         {
             int offset = headerBytes + index * combinedRecordBytes;
+            if (globalSkills && firstObjectId + index < 2048)
+            {
+                if (firstObjectId + recordCount <= 2048 || !IsAllZero(pack, offset, combinedRecordBytes))
+                    throw new InvalidDataException("全局技能保留编号区被占用或缺少固定技能。");
+                continue;
+            }
             if (IsAllZero(pack, offset, PalSaveLayout.WinObjectRecordSize) ||
                 IsAllZero(
                     pack,

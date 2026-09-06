@@ -128,9 +128,13 @@ public sealed class SaveCompatibilityService
                 byte[] original = ReadAllBytesShared(savePath);
                 string extendedMagicSidecarPath = ExtendedRoleMagicSidecar.GetPath(savePath);
                 bool extendedMagicSidecarExists = File.Exists(extendedMagicSidecarPath);
-                ExtendedRoleMagicSidecar.TryLoadRecoverable(
-                    savePath, original, out var extendedMagics, out var sidecarWarning);
-                bool persistExtendedMagicSidecar = extendedMagicSidecarExists &&
+                bool nativeMagicSlots = PalSaveDocument.UsesNativeMagicSlots(fullRoot, reference!.Resources);
+                var extendedMagics = ExtendedRoleMagicState.FromPhysicalPage0(original);
+                string? sidecarWarning = null;
+                if (!nativeMagicSlots)
+                    ExtendedRoleMagicSidecar.TryLoadRecoverable(
+                        savePath, original, out extendedMagics, out sidecarWarning);
+                bool persistExtendedMagicSidecar = !nativeMagicSlots && extendedMagicSidecarExists &&
                     (sidecarWarning is not null || extendedMagics.HasExtendedPayload);
 
                 string customRoleSidecarPath = PalCustomRoleSaveStateStore.GetPath(savePath);
@@ -144,7 +148,7 @@ public sealed class SaveCompatibilityService
                             fullRoot,
                             out customRoleLibrary,
                             out string? libraryError,
-                            reference!.ObjectCount))
+                            reference!.Resources?.RuntimeObjectRecordCount ?? reference.ObjectCount))
                     {
                         throw new InvalidDataException(
                             libraryError ?? "存在自定义主角 sidecar，但固定角色库不存在。");
@@ -360,7 +364,7 @@ public sealed class SaveCompatibilityService
             root,
             out PalCustomRoleLibrary customRoleLibrary,
             out string? customRoleLibraryError,
-            reference.ObjectCount);
+            reference.Resources?.RuntimeObjectRecordCount ?? reference.ObjectCount);
         for (int slot = 1; slot <= 5; slot++)
         {
             string fileName = $"{slot}.RPG";
@@ -377,7 +381,8 @@ public sealed class SaveCompatibilityService
                 string? sidecarIssue = null;
                 ExtendedRoleMagicState learnedMagics =
                     ExtendedRoleMagicState.FromPhysicalPage0(bytes);
-                if (File.Exists(ExtendedRoleMagicSidecar.GetPath(path)))
+                if (!PalSaveDocument.UsesNativeMagicSlots(root, reference.Resources) &&
+                    File.Exists(ExtendedRoleMagicSidecar.GetPath(path)))
                 {
                     _ = ExtendedRoleMagicSidecar.TryLoad(
                         path, bytes, out learnedMagics,

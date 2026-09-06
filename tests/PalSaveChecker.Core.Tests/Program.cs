@@ -23,6 +23,7 @@ Run("Dream 2.2 visible active profile contract", TestDream220VisibleActiveProfil
 Run("active profile layout mismatch fails closed", TestActiveProfileLayoutMismatch);
 Run("invalid active profile does not fall back", TestInvalidActiveProfileFailsClosed);
 Run("running game repair policy", TestRunningGameRepairPolicy);
+Run("optional v1.62 global skills and fixed-role library repair", TestOptionalGlobalPlayerFixture);
 Run("optional Hunqian 1.67 runtime read-only check", TestOptionalHunqianRuntime);
 Run("optional real runtime isolated repair", TestOptionalRealRuntime);
 
@@ -49,6 +50,59 @@ void Run(string name, Action test)
     catch (Exception ex)
     {
         failures.Add($"FAIL {name}: {ex.Message}");
+    }
+}
+
+static void TestOptionalGlobalPlayerFixture()
+{
+    string? root = Environment.GetEnvironmentVariable("PAL98_TOOLS_FIXTURE_GAME");
+    if (string.IsNullOrWhiteSpace(root))
+    {
+        Console.WriteLine("SKIP PAL98_TOOLS_FIXTURE_GAME not set");
+        return;
+    }
+    string save = Path.Combine(root, "2.RPG");
+    string libraryPath = PalCustomRoleLibraryStore.GetPath(root);
+    var paths = Enumerable.Range(1, 5).SelectMany(slot => new[] {
+        Path.Combine(root, $"{slot}.RPG"),
+        PalCustomRoleSaveStateStore.GetPath(Path.Combine(root, $"{slot}.RPG")),
+        ExtendedRoleMagicSidecar.GetPath(Path.Combine(root, $"{slot}.RPG")) }).Append(libraryPath).ToArray();
+    var before = paths.ToDictionary(path => path, path => File.Exists(path) ? File.ReadAllBytes(path) : null);
+    try
+    {
+        var resources = PalResourceCatalog.Load(root);
+        Equal(true, PalCustomRoleLibraryStore.TryLoad(root, out var library, out _, resources.RuntimeObjectRecordCount), "fixture library");
+        library.CustomRoles[0].LearnedMagics.Clear();
+        library.CustomRoles[0].LearnedMagics.Add(new(1, 2048));
+        PalCustomRoleLibraryStore.WriteAtomically(root, library, false, resources.RuntimeObjectRecordCount);
+        var legacy = ExtendedRoleMagicState.FromPhysicalPage0(before[save]!);
+        legacy.Roles[0][40] = 2236;
+        ExtendedRoleMagicSidecar.WriteAtomically(save, before[save]!, legacy);
+        string legacyPath = ExtendedRoleMagicSidecar.GetPath(save);
+        File.WriteAllText(legacyPath, File.ReadAllText(legacyPath).Replace(HashFile(save).ToLowerInvariant(), new string('0', 64)));
+        string legacyHash = HashFile(legacyPath);
+        var service = new SaveCompatibilityService();
+        SaveCheckReport report = service.Check(root);
+        SaveCheckItem item = report.Saves.Single(x => x.FileName == "2.RPG");
+        Equal(false, item.CustomRoleSidecarIssue, item.CustomRoleSidecarError ?? "global skill in fixed role library accepted");
+        Equal(false, item.LearnedMagicProfileIssue, item.LearnedMagicProfileError ?? "fixed skill IDs need no migration");
+        Equal(false, item.ExtendedMagicSidecarIssue, "inactive legacy sidecar is ignored");
+        Equal(true, before[save]!.SequenceEqual(File.ReadAllBytes(save)), "Check is read-only");
+        SaveRepairReport repair = service.Repair(root, keepBackup: true);
+        Equal(SaveCheckStatus.Clean, repair.After.Saves.Single(x => x.FileName == "2.RPG").Status, "repaired object definitions are clean");
+        var after = PalSaveDocument.Load(save, SaveFormat.Auto, root);
+        var native = ExtendedRoleMagicState.FromPhysicalPage0(before[save]!);
+        for (int role = 0; role < 6; role++)
+            Equal(true, native.Roles[role].Take(32).SequenceEqual(after.GetMagics(role).Select(x => x.MagicId)), "native skill column " + role);
+        Equal(legacyHash, HashFile(legacyPath), "repair does not reactivate or rewrite legacy 999 slots");
+        Equal(true, after.HasCustomRoleSaveState, "custom roles rebound to repaired RPG");
+        Console.WriteLine("GLOBAL CHECKER " + resources.ActiveProfileId + " accepted global role learning and preserved native skills");
+    }
+    finally
+    {
+        foreach (var pair in before)
+            if (pair.Value is not null) File.WriteAllBytes(pair.Key, pair.Value);
+            else if (File.Exists(pair.Key)) File.Delete(pair.Key);
     }
 }
 
