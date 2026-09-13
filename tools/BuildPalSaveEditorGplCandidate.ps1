@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$CandidateName = 'extended-role-magics-0.1.5-gpl-candidate-20260829',
-    [string]$RuntimeRoot = 'artifacts\v159-extended-role-magics'
+    [string]$CandidateName = 'palsaveeditor-0.1.6-gpl-candidate-20260913',
+    [string]$RuntimeRoot = 'artifacts\v163-20260913'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,10 +35,10 @@ foreach ($entry in $runtimeDirectories.GetEnumerator()) {
     }
 }
 
-$editorExe = Join-Path $runtimeRootFull 'PalSaveEditor-win7-net472\PalSaveEditor.exe'
+$editorExe = Join-Path $runtimeRootFull 'PalSaveEditor-win7-net472\仙剑98编辑器.exe'
 $checkerExe = Join-Path $runtimeRootFull 'PalSaveChecker-win7-net472\仙剑98存档检查工具.exe'
-if ((Get-Item -LiteralPath $editorExe).VersionInfo.FileVersion -ne '0.1.5.0') {
-    throw 'PalSaveEditor.exe is not version 0.1.5.0'
+if ((Get-Item -LiteralPath $editorExe).VersionInfo.FileVersion -ne '0.1.6.0') {
+    throw 'PalSaveEditor.exe is not version 0.1.6.0'
 }
 if (-not (Test-Path -LiteralPath $checkerExe -PathType Leaf)) {
     throw "PalSaveChecker executable is missing: $checkerExe"
@@ -98,7 +98,7 @@ $metadata = @(
     $metadata + [Environment]::NewLine,
     [Text.UTF8Encoding]::new($false))
 
-$sourceZip = Join-Path $candidateRoot 'PalSaveEditor-0.1.5-source.zip'
+$sourceZip = Join-Path $candidateRoot 'PalSaveEditor-0.1.6-source.zip'
 Compress-Archive -Path (Join-Path $sourceStage '*') -DestinationPath $sourceZip -CompressionLevel Optimal
 
 $resolvedStage = [IO.Path]::GetFullPath($sourceStage)
@@ -118,13 +118,13 @@ $payload = Get-ChildItem -LiteralPath $candidateRoot -File -Recurse | Sort-Objec
 $manifest = [ordered]@{
     schema = 'pal98.local-public-tool-release.v1'
     product = 'PalSaveEditor and PalSaveChecker'
-    version = '0.1.5'
+    version = '0.1.6'
     license = 'GPL-2.0-only'
     repository_owner = 'othercat'
     repository = 'https://github.com/othercat/PalSaveEditor'
     build_configuration = 'Release; net472 x86 only'
     source_revision = $head
-    source_snapshot_includes_uncommitted_changes = $true
+    source_snapshot_includes_uncommitted_changes = @(& git -C $repoRoot status --porcelain -- . ':!.agents' ':!.claude' ':!.codegraph' ':!artifacts' ':!AGENTS.md' ':!CLAUDE.md').Count -gt 0
     payload = $payload
 }
 [IO.File]::WriteAllText(
