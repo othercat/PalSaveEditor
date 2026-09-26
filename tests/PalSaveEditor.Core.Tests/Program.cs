@@ -27,6 +27,8 @@ var tests = new (string Name, Action Run)[]
     ("real sample detection and resource catalogs", TestRealSamples),
     ("safe write creates exact backup", TestSafeWrite),
     ("safe write without retained backup", TestSafeWriteWithoutBackup),
+    ("central backup preserves game-relative paths and external saves", TestCentralBackups),
+    ("central backup refuses occupied roots and reparse points", TestCentralBackupSafety),
 };
 
 var failures = new List<string>();
@@ -176,6 +178,12 @@ static void TestCustomRoleLibrary()
         Equal(2, reloadedSave.GetMagics(6).Count, "custom learned skills round trip");
         Equal((ushort)6, reloadedSave.GetParty()[1].RoleId, "party can select role 6");
         Equal((ushort)7, reloadedSave.GetParty()[2].RoleId, "party can select role 7");
+        byte[] beforeGroupedSidecar = File.ReadAllBytes(PalCustomRoleSaveStateStore.GetPath(savePath));
+        reloadedSave.Cash++;
+        SaveWriteResult groupedBackup = reloadedSave.Save();
+        string groupedSidecarPath = groupedBackup.BackupPath + ".pal98-custom-roles.json";
+        True(File.Exists(groupedSidecarPath), "editor custom sidecar remains grouped with RPG backup");
+        SequenceEqual(beforeGroupedSidecar, File.ReadAllBytes(groupedSidecarPath), "grouped editor sidecar retains original bytes");
 
         loaded.CustomRoles.Add(new PalCustomRoleDefinition
         {
@@ -1338,6 +1346,7 @@ static void TestSafeWriteWithoutBackup()
         True(result.BackupPath is null, "backup path omitted");
         SequenceEqual(expected, File.ReadAllBytes(path), "saved bytes");
         True(!document.IsDirty, "document clean after save without backup");
+        True(!Directory.Exists(Path.Combine(directory, "backup")), "disabled retained backups create no backup directory");
         Equal(0, Directory.EnumerateFiles(directory, "*.bak-*", SearchOption.TopDirectoryOnly).Count(),
             "no retained backup files");
         Equal(0, Directory.EnumerateFiles(directory, "*.rollback", SearchOption.TopDirectoryOnly).Count(),
@@ -1348,6 +1357,89 @@ static void TestSafeWriteWithoutBackup()
     finally
     {
         Directory.Delete(directory, recursive: true);
+    }
+}
+
+static void TestCentralBackups()
+{
+    string temporary = CreateTestDirectory();
+    try
+    {
+        string game = Path.Combine(temporary, "繁體 游戏 包");
+        string sourceDirectory = Path.Combine(game, "RPGS", "測試 存档");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllBytes(Path.Combine(game, "PAL.EXE"), new byte[] { 1 });
+        string source = Path.Combine(sourceDirectory, "1.RPG");
+        byte[] original = new byte[SaveFormatDetector.KnownPal98Length];
+        File.WriteAllBytes(source, original);
+        var document = PalSaveDocument.Load(source, SaveFormat.PalWin95);
+        document.Cash = 10;
+        SaveWriteResult first = document.Save();
+        string prefix = Path.Combine(game, "backup", "SaveTools") + Path.DirectorySeparatorChar;
+        True(first.BackupPath!.StartsWith(prefix, StringComparison.OrdinalIgnoreCase), "backup belongs to game root");
+        True(first.BackupPath.EndsWith(Path.Combine("RPGS", "測試 存档", "1.RPG")), "relative source path preserved");
+        SequenceEqual(original, File.ReadAllBytes(first.BackupPath), "backup contains original bytes");
+        document.Cash = 11;
+        SaveWriteResult second = document.Save();
+        True(first.BackupPath != second.BackupPath, "repeated saves have unique backup names");
+        SequenceEqual(original, File.ReadAllBytes(first.BackupPath), "prior backup is not overwritten");
+        Equal(0, Directory.GetFiles(sourceDirectory, "*.bak-*").Length, "no adjacent persistent backups");
+
+        string external = Path.Combine(temporary, "外部 存檔");
+        Directory.CreateDirectory(external);
+        string externalSave = Path.Combine(external, "1.RPG");
+        File.WriteAllBytes(externalSave, original);
+        SaveWriteResult savedExternal = document.Save(externalSave);
+        True(savedExternal.BackupPath!.StartsWith(Path.Combine(external, "backup", "SaveTools") + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase), "Save As does not send another directory's backup into source game");
+
+        var library = new PalCustomRoleLibrary();
+        PalCustomRoleLibraryStore.WriteAtomically(game, library);
+        var libraryResult = PalCustomRoleLibraryStore.WriteAtomically(game, library);
+        True(libraryResult.BackupPath!.StartsWith(prefix, StringComparison.OrdinalIgnoreCase), "library uses game backup root");
+        True(libraryResult.BackupPath.EndsWith(Path.Combine("palmod", "CustomRoles", "roles.json")), "library source path preserved");
+
+        string companion = SaveBackupPaths.Companion(second.BackupPath!, ".pal98-custom-roles.json");
+        Equal(second.BackupPath + ".pal98-custom-roles.json", companion, "sidecar remains next to RPG backup");
+        File.WriteAllText(companion, "preserve");
+        Throws<IOException>(() => SaveBackupPaths.Companion(second.BackupPath!, ".pal98-custom-roles.json"), "existing companion refused");
+    }
+    finally { Directory.Delete(temporary, recursive: true); }
+}
+
+static void TestCentralBackupSafety()
+{
+    string temporary = CreateTestDirectory();
+    string? link = null;
+    try
+    {
+        string source = Path.Combine(temporary, "1.RPG");
+        byte[] original = new byte[SaveFormatDetector.KnownPal98Length];
+        File.WriteAllBytes(source, original);
+        string backup = Path.Combine(temporary, "backup");
+        File.WriteAllText(backup, "occupied");
+        var document = PalSaveDocument.Load(source, SaveFormat.PalWin95);
+        document.Cash = 321;
+        Throws<IOException>(() => document.Save(), "occupied backup directory prevents save");
+        SequenceEqual(original, File.ReadAllBytes(source), "rejected backup leaves RPG intact");
+        File.Delete(backup);
+        string outside = Path.Combine(temporary, "outside");
+        Directory.CreateDirectory(outside);
+        if (!BackupPathNative.CreateSymbolicLink(backup, outside, 3))
+        {
+            Console.WriteLine("SKIP  reparse test cannot create directory symlink; Windows error " +
+                System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+            return;
+        }
+        link = backup;
+        Throws<IOException>(() => document.Save(), "backup directory reparse refused");
+        SequenceEqual(original, File.ReadAllBytes(source), "reparse refusal leaves RPG intact");
+        Equal(0, Directory.GetFileSystemEntries(outside).Length, "reparse target untouched");
+    }
+    finally
+    {
+        if (link is not null) Directory.Delete(link);
+        Directory.Delete(temporary, recursive: true);
     }
 }
 
@@ -1451,4 +1543,12 @@ static void Throws<TException>(Action action, string message) where TException :
     }
 
     throw new InvalidOperationException($"{message}: expected {typeof(TException).Name}");
+}
+
+internal static class BackupPathNative
+{
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+        SetLastError = true, EntryPoint = "CreateSymbolicLinkW")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.I1)]
+    internal static extern bool CreateSymbolicLink(string path, string target, int flags);
 }

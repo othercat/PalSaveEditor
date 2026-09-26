@@ -188,6 +188,8 @@ static void TestPollutedPlayerRecordsRepair()
     SaveRepairItem item = repair.Results.Single(result => result.FileName == "1.RPG");
     Equal(true, item.Success, "repair success");
     Equal(true, File.Exists(item.BackupPath), "backup exists");
+    Equal(true, item.BackupPath!.StartsWith(Path.Combine(fixture.Root, "backup", "SaveTools") + Path.DirectorySeparatorChar,
+        StringComparison.OrdinalIgnoreCase), "checker backup is centralized");
     SequenceEqual(original, File.ReadAllBytes(item.BackupPath!), "backup bytes");
     SequenceEqual(originalTail, File.ReadAllBytes(savePath).AsSpan(0x1620 + 748).ToArray(), "tail preserved");
 }
@@ -391,6 +393,8 @@ static void TestCustomRoleSidecarAppendRepair()
     Equal(true, File.Exists(repairedItem.BackupPath), "RPG backup exists");
     string sidecarBackupPath = repairedItem.BackupPath + ".pal98-custom-roles.json";
     Equal(true, File.Exists(sidecarBackupPath), "custom role sidecar backup exists");
+    Equal(true, sidecarBackupPath.StartsWith(Path.Combine(fixture.Root, "backup", "SaveTools") + Path.DirectorySeparatorChar,
+        StringComparison.OrdinalIgnoreCase), "paired custom role sidecar is centralized");
     SequenceEqual(oldSidecar, File.ReadAllBytes(sidecarBackupPath),
         "custom role sidecar backup preserves original bytes");
 

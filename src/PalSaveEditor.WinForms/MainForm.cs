@@ -133,7 +133,8 @@ internal sealed class MainForm : Form
         help.DropDownItems.Add("安全说明", null, (_, _) => MessageBox.Show(
             this,
             "“保留原存档备份”默认勾选，可在工具栏取消。\r\n" +
-            "取消后不会留下 .bak 文件，但写入复核完成前仍保留临时回滚副本。\r\n" +
+            "备份集中在所属游戏的 backup/SaveTools；独立存档使用存档目录下的同名文件夹。\r\n" +
+            "取消后不会保留备份，但写入复核完成前仍保留临时回滚副本。\r\n" +
             "编辑器只修改 PAL 固定字段，未知的对象与事件尾部逐字节保留。\r\n" +
             "建议关闭游戏后再编辑存档。",
             "安全说明",

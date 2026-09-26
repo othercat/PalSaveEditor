@@ -220,7 +220,15 @@ public static class PalCustomRoleSaveStateStore
         byte[] rpgBytes,
         PalCustomRoleLibrary library,
         PalCustomRoleSaveState state,
-        bool createBackup)
+        bool createBackup) => WriteAtomically(rpgPath, rpgBytes, library, state, createBackup, null);
+
+    public static string WriteAtomically(
+        string rpgPath,
+        byte[] rpgBytes,
+        PalCustomRoleLibrary library,
+        PalCustomRoleSaveState state,
+        bool createBackup,
+        string? rpgBackupPath)
     {
         library.Validate();
         if (state.LibraryId != library.LibraryId || state.LibraryVersion != library.LibraryVersion ||
@@ -229,7 +237,8 @@ public static class PalCustomRoleSaveStateStore
         string destination = GetPath(rpgPath);
         string temporary = destination + $".{Guid.NewGuid():N}.tmp";
         string? backup = File.Exists(destination) && createBackup
-            ? destination + $".bak-{DateTime.Now:yyyyMMdd-HHmmss}"
+            ? rpgBackupPath is null ? SaveBackupPaths.Create(destination)
+                : SaveBackupPaths.Companion(rpgBackupPath, ".pal98-custom-roles.json")
             : null;
         string? rollback = File.Exists(destination)
             ? backup ?? destination + $".{Guid.NewGuid():N}.rollback"

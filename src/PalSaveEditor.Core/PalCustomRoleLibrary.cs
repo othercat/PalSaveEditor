@@ -300,7 +300,7 @@ public static class PalCustomRoleLibraryStore
             ?? throw new InvalidOperationException("无法确定自定义人物库目录。");
         Directory.CreateDirectory(directory);
         string temporary = Path.Combine(directory, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
-        string? backup = File.Exists(destination) && createBackup ? BuildBackupPath(destination) : null;
+        string? backup = File.Exists(destination) && createBackup ? SaveBackupPaths.Create(destination) : null;
         string? rollback = File.Exists(destination) && !createBackup
             ? Path.Combine(directory, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.rollback")
             : backup;
@@ -571,12 +571,4 @@ public static class PalCustomRoleLibraryStore
         if (required.Count != 0) throw new InvalidDataException($"{source} 缺少必要字段 {string.Join(", ", required)}。");
     }
 
-    private static string BuildBackupPath(string destination)
-    {
-        string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        string candidate = $"{destination}.bak-{stamp}";
-        int suffix = 1;
-        while (File.Exists(candidate)) candidate = $"{destination}.bak-{stamp}-{suffix++}";
-        return candidate;
-    }
 }

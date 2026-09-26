@@ -210,7 +210,7 @@ public sealed class SaveCompatibilityService
                     if (persistExtendedMagicSidecar)
                     {
                         extendedMagicSidecarRollbackPath = keepBackup
-                            ? rollbackPath + ExtendedRoleMagicState.Suffix
+                            ? SaveBackupPaths.Companion(rollbackPath, ExtendedRoleMagicState.Suffix)
                             : extendedMagicSidecarPath + $".{Guid.NewGuid():N}.rollback";
                         File.Copy(
                             extendedMagicSidecarPath,
@@ -222,7 +222,7 @@ public sealed class SaveCompatibilityService
                     if (persistCustomRoleSidecar)
                     {
                         customRoleSidecarRollbackPath = keepBackup
-                            ? rollbackPath + ".pal98-custom-roles.json"
+                            ? SaveBackupPaths.Companion(rollbackPath, ".pal98-custom-roles.json")
                             : customRoleSidecarPath + $".{Guid.NewGuid():N}.rollback";
                         File.Copy(
                             customRoleSidecarPath,
@@ -924,12 +924,7 @@ public sealed class SaveCompatibilityService
         string rollback;
         if (keepBackup)
         {
-            string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-            rollback = Path.Combine(directory, $"{Path.GetFileName(path)}.bak-{timestamp}");
-            for (int suffix = 1; File.Exists(rollback); suffix++)
-            {
-                rollback = Path.Combine(directory, $"{Path.GetFileName(path)}.bak-{timestamp}-{suffix}");
-            }
+            rollback = SaveBackupPaths.Create(path);
         }
         else
         {

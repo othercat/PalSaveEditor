@@ -753,7 +753,7 @@ public sealed class PalSaveDocument
         bool destinationExisted = File.Exists(destination);
         string? rollbackPath = destinationExisted
             ? createBackup
-                ? BuildBackupPath(destination)
+                ? SaveBackupPaths.Create(destination)
                 : System.IO.Path.Combine(
                     directory,
                     $".{System.IO.Path.GetFileName(destination)}.{Guid.NewGuid():N}.rollback")
@@ -822,7 +822,7 @@ public sealed class PalSaveDocument
                 RememberCompanion(PalCustomRoleSaveStateStore.GetPath(destination));
                 PalCustomRoleSaveStateStore.WriteAtomically(
                     destination, persisted, CustomRoleLibrary,
-                    _customRoleState, createBackup);
+                    _customRoleState, createBackup, createBackup ? rollbackPath : null);
                 HasCustomRoleSaveState = true;
                 CustomRoleSaveStateWarning = null;
             }
@@ -908,19 +908,6 @@ public sealed class PalSaveDocument
             throw new InvalidDataException(
                 $"文件长度不符合 {format.GetDisplayName()} 的固定前缀和 32 字节事件记录边界。");
         }
-    }
-
-    private static string BuildBackupPath(string destination)
-    {
-        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        var candidate = $"{destination}.bak-{stamp}";
-        var suffix = 1;
-        while (File.Exists(candidate))
-        {
-            candidate = $"{destination}.bak-{stamp}-{suffix++}";
-        }
-
-        return candidate;
     }
 
     private void CompressInventory()

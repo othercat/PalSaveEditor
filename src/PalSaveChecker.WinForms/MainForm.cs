@@ -134,7 +134,7 @@ internal sealed class MainForm : Form
             else
             {
                 string message = keepBackup
-                    ? "修复及落盘复核完成。原存档备份保留在游戏目录。"
+                    ? "修复及落盘复核完成。原存档备份保留在游戏目录的 backup/SaveTools 中。"
                     : "修复及落盘复核完成。按所选设置未保留备份。";
                 if (palRunning)
                 {
