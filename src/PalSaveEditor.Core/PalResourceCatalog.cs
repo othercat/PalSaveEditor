@@ -143,7 +143,8 @@ public sealed class PalResourceCatalog
         // mainland Win95 release uses GBK. The object-record width is the same
         // edition signal used by the game data itself and avoids mojibake.
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-        var codePage = recordSize == PalSaveLayout.DosObjectRecordSize ? 950 : 936;
+        var codePage = EditorEdition.IsGeshi ? GeshiSaveContract.GetResourceCodePage(fullDirectory) :
+            recordSize == PalSaveLayout.DosObjectRecordSize ? 950 : 936;
         var wordEncoding = Encoding.GetEncoding(
             codePage,
             EncoderFallback.ExceptionFallback,
@@ -155,6 +156,7 @@ public sealed class PalResourceCatalog
             int length = Array.IndexOf(wordBytes, (byte)0, recordOffset, 10);
             length = length >= 0 ? length - recordOffset : 10;
             words[i] = wordEncoding.GetString(wordBytes, recordOffset, length).Trim();
+            if (EditorEdition.IsGeshi) words[i] = GeshiSaveContract.DisplayName(words[i]);
         }
 
         var result = new PalResourceCatalog(

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Globalization;
 using PalSaveEditor.Core;
 
 Console.OutputEncoding = Encoding.UTF8;
@@ -25,7 +26,8 @@ var failures = new List<string>();
 
 var tests = new (string Name, Action Run)[]
 {
-    ("700-object DOS contract and Big5 typed catalog", Catalog),
+    ("700-object DOS contract and simplified typed catalog", Catalog),
+    ("simplified display and search on traditional cultures", TraditionalCulture),
     ("five original saves: no-op byte identity and retained backups", OriginalRoundTrips),
     ("exact cash/role edits preserve objects events reserved bytes and extra tail", ExactFieldEdits),
     ("six native roles, five party records, bounded followers", PartyAndRoles),
@@ -97,8 +99,8 @@ void Catalog()
     Equal(700, catalog.RuntimeObjectRecordCount, "runtime capacity");
     Equal(12, catalog.ObjectRecordSize, "DOS width");
     Equal(180224, catalog.EventObjectBytes, "real events");
-    Equal("金剛武神咒", catalog.GetObjectName(584), "learning item Big5");
-    Equal("隔世追兇", catalog.GetObjectName(571), "special magic Big5");
+    Equal("金刚武神咒", catalog.GetObjectName(584), "learning item simplified");
+    Equal("隔世追凶", catalog.GetObjectName(571), "special magic simplified");
     Equal("魂息", catalog.GetObjectName(575), "special magic Big5");
     Equal(242, Enumerable.Range(0, 588).Count(catalog.IsItem), "audited item ID count");
     Equal(107, Enumerable.Range(0, 588).Count(catalog.IsMagic), "usable magic ID count");
@@ -108,6 +110,25 @@ void Catalog()
     Check(!catalog.IsMagic(331) && !catalog.IsMagic(391) && !catalog.IsMagic(398), "placeholders/enemies not magic");
     Check(catalog.SearchObjects(null, 600, catalog.IsItem).All(x => catalog.IsItem(x.Id)), "item picker source");
     Check(catalog.SearchObjects(null, 600, catalog.IsMagic).Any(x => x.Id == 571), "magic picker source");
+}
+void TraditionalCulture()
+{
+    var before = CultureInfo.CurrentCulture;
+    var beforeUi = CultureInfo.CurrentUICulture;
+    try
+    {
+        foreach (string name in new[] { "zh-CN", "zh-TW", "zh-HK" })
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(name);
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(name);
+            var catalog = PalResourceCatalog.Load(source);
+            Equal("隔世追凶", catalog.GetObjectName(571), name + " always simplified magic");
+            Equal("铜钱镖", catalog.GetObjectName(344), name + " always simplified item");
+            Check(catalog.SearchObjects("金刚", 600, catalog.IsItem).Any(x => x.Id == 584), name + " simplified search");
+        }
+        Equal("铜钱镖", GeshiSaveContract.DisplayName("銅錢鏢"), "legacy resource display conversion");
+    }
+    finally { CultureInfo.CurrentCulture = before; CultureInfo.CurrentUICulture = beforeUi; }
 }
 void OriginalRoundTrips()
 {
@@ -173,7 +194,7 @@ void NativeMagics()
     var document = Load(root);
     document.ReplaceMagics(5, [571, 575, 351]);
     Equal(3, document.GetMagics(5).Count, "physical native skills");
-    Equal("金剛武神咒", document.GetMagics(5)[2].DisplayName, "magic name");
+    Equal("金刚武神咒", document.GetMagics(5)[2].DisplayName, "magic name");
     document.AddMagic(5, 571);
     Equal(3, document.GetMagics(5).Count, "duplicate is not added");
     Reject<InvalidDataException>(() => document.AddMagic(5, 584), "item cannot be magic");

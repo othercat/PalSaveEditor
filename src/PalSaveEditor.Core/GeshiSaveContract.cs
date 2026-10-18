@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace PalSaveEditor.Core;
 
@@ -97,7 +99,11 @@ public static class GeshiSaveContract
     }
 
     public static void ValidateResources(string resourceDirectory)
+        => GetResourceCodePage(resourceDirectory);
+
+    public static int GetResourceCodePage(string resourceDirectory)
     {
+        bool original = true, simplified = true;
         foreach (var resource in Resources)
         {
             string path = Path.Combine(resourceDirectory, resource.Name);
@@ -105,9 +111,33 @@ public static class GeshiSaveContract
             using var sha = SHA256.Create();
             using var stream = File.OpenRead(path);
             string actual = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", string.Empty).ToLowerInvariant();
-            if (!string.Equals(actual, resource.Sha256, StringComparison.Ordinal))
-                throw new InvalidDataException($"{resource.Name} 不是已验证的《隔世追凶·简单》资源，未打开或写入存档。");
+            string simplifiedHash = resource.Name switch
+            {
+                "WORD.DAT" => "6bb07cbcdc47073a60ab53386f7d57a7cc8768c7845fcf679baf08d72a08e4fd",
+                "M.MSG" => "599525efa15e0e11e65942f4139ef097bdb8a784a9fd7cb1999226ef754435de",
+                _ => resource.Sha256,
+            };
+            original &= string.Equals(actual, resource.Sha256, StringComparison.Ordinal);
+            simplified &= string.Equals(actual, simplifiedHash, StringComparison.Ordinal);
         }
+        if (!original && !simplified)
+            throw new InvalidDataException("配套文件不是完整的已验证隔世原版或简体资源组合，未打开或写入存档。");
+        return simplified ? 936 : 950;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int LCMapStringEx(string localeName, uint flags, string source, int sourceLength,
+        StringBuilder? destination, int destinationLength, IntPtr version, IntPtr reserved, IntPtr sortHandle);
+
+    public static string DisplayName(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return value;
+        int size = LCMapStringEx("zh-CN", 0x02000000, value, -1, null, 0, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        if (size == 0) throw new InvalidOperationException("简体名称转换失败。");
+        var result = new StringBuilder(size);
+        if (LCMapStringEx("zh-CN", 0x02000000, value, -1, result, size, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero) != size)
+            throw new InvalidOperationException("简体名称转换失败。");
+        return result.ToString();
     }
 
     public static void ValidateSave(byte[] bytes)

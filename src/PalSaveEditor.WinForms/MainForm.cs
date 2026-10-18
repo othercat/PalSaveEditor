@@ -190,7 +190,7 @@ internal sealed class MainForm : Form
         help.DropDownItems.Add("关于", null, (_, _) => MessageBox.Show(
             this,
             EditorEdition.IsGeshi
-                ? "隔世追凶·简单 存档编辑器 0.1.7\r\n适用于本游戏包的原始与 SDLPAL 存档。\r\n六个角色槽、32 个法术槽；物品和法术名称读取配套 Big5 资源。\r\n对象、事件和附加尾部原样保留。"
+                ? "隔世追凶·简单 存档编辑器 0.1.8\r\n适用于本游戏包的原始与 SDLPAL 存档。\r\n六个角色槽、32 个法术槽；读取配套资源并统一显示简体名称。\r\n对象、事件和附加尾部原样保留。"
                 : "仙剑98编辑器\r\n支持：仙剑 98 柔情版、仙剑 DOS、梦幻 2.20 DOS 版和梦幻2.2显血版。\r\n可编辑固定自定义主角库、姓名、完整属性、隐藏属性和等级领悟表。\r\n梦幻2.2显血版：主播粉丝、孙小柔、othercat。",
             "关于",
             MessageBoxButtons.OK,
