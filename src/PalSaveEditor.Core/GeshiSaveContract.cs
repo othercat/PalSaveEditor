@@ -118,7 +118,9 @@ public static class GeshiSaveContract
                 _ => resource.Sha256,
             };
             original &= string.Equals(actual, resource.Sha256, StringComparison.Ordinal);
-            simplified &= string.Equals(actual, simplifiedHash, StringComparison.Ordinal);
+            // Both Simplified dialogue editions still require the fixed Simplified WORD and SSS/DATA.
+            simplified &= string.Equals(actual, simplifiedHash, StringComparison.Ordinal) ||
+                (resource.Name == "M.MSG" && actual == "880aff05741da8d00a152b7a22661ad509817f36e7bacf52d3fae4cd8f1aceb4");
         }
         if (!original && !simplified)
             throw new InvalidDataException("配套文件不是完整的已验证隔世原版或简体资源组合，未打开或写入存档。");

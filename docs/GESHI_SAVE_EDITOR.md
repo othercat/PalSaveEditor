@@ -1,6 +1,6 @@
 # 隔世追凶·简单 存档编辑器
 
-专用版本 **0.1.8.0**，Windows 10+，.NET Framework 4.7.2，x86。
+专用版本 **0.1.9.0**，Windows 10+，.NET Framework 4.7.2，x86。
 这是 PalSaveEditor 原仓的专用构建，保留原编辑器的主要角色、物品、杂项界面。
 源码不包含游戏资源，也不改变通用版的默认构建。
 
@@ -28,19 +28,24 @@
 
 ## 固定资源与存档合同
 
-打开与保存均核对以下简体资源 SHA256；任何文件不匹配时拒绝写入。
+打开与保存均核对以下半角冒号简体资源 SHA256；未知或不完整组合拒绝写入。
 
 | 文件 | SHA256 |
 | --- | --- |
 | SSS.MKF | `92efd5ec75dc945f3620f96f61e38879fdc0c605f5916d1143c36a4311ad57f4` |
 | DATA.MKF | `c1342c3fe39e6c624c7388ad718438819d5981cf73e712d3c613548e7162dbc5` |
 | WORD.DAT | `6bb07cbcdc47073a60ab53386f7d57a7cc8768c7845fcf679baf08d72a08e4fd` |
-| M.MSG | `599525efa15e0e11e65942f4139ef097bdb8a784a9fd7cb1999226ef754435de` |
+| M.MSG | `880aff05741da8d00a152b7a22661ad509817f36e7bacf52d3fae4cd8f1aceb4` |
 
 也兼容完整的旧资源组合：相同 SSS/DATA，WORD 为
 `01c2ceb561730205ca358bb31d8cb0cedf79c0b63113abc1f32905849e231811`，M.MSG 为
 `7e4597015be34d8f772bdde13453106b8c9cd824a4fc69073a33bf9aac39612f`。
-两套 WORD/M.MSG 不允许混用。简体转换不改变脚本、对象 ID、对话索引或存档结构。
+也兼容旧简体 M.MSG `599525efa15e0e11e65942f4139ef097bdb8a784a9fd7cb1999226ef754435de`，
+它与新半角版本共用上表简体 WORD.DAT。三种组合始终要求相同的 SSS/DATA，
+旧 Big5 WORD 只能配旧 Big5 M.MSG；简体 WORD 只能配两种已验证简体 M.MSG。
+不能把已知的单文件摘要任意拼装。此次对白标点兼容不改变存档结构或通用版行为。
+追踪：[PalSaveEditor #3](https://github.com/othercat/PalSaveEditor/issues/3)、
+[游戏 #28](https://github.com/othercat/sdlpal-lostedit/issues/28)。
 
 资源 SSS 对象表实际有 588 条，每条 12 字节；存档固定保留 **700** 个 DOS 对象槽。
 关键存档偏移：现金 40、队伍 44、角色表 508、背包 1728、场景 3264、对象 5664、事件 **14064**。
@@ -65,6 +70,9 @@ dotnet build src/PalSaveEditor.WinForms/PalSaveEditor.WinForms.csproj -c Release
 # 只读 GameRoot 和 ForeignSave；测试副本、日志均位于本仓 artifacts。
 ./tests/run_geshi_tests.ps1 -GameRoot '游戏包目录' -ForeignSave @('其他版本/1.RPG')
 
+# 可同时验证三种真实资源及全部六种 WORD/M.MSG 组合；每个输入只读。
+./tests/run_geshi_tests.ps1 -GameRoot '半角简体游戏包' -OriginalGameRoot '原DOS游戏包' -SimplifiedGameRoot '旧简体游戏包' -Pal98GameRoot '半角简体游戏包'
+
 # 发布到新建 artifacts/publish-geshi-时间目录，不携带游戏资源或存档。
 ./scripts/publish-geshi.ps1
 ```
@@ -86,6 +94,8 @@ dotnet build src/PalSaveEditor.WinForms/PalSaveEditor.WinForms.csproj -c Release
 PALDLL 状态完全隔离、四资源身份错误、短文件/异版/坏头字段、外部进度冲突、备份失败和占用后重试。
 测试还可读取本机实际 Win95/DOS 存档，验证拒绝后源文件未变；在 zh-CN、zh-TW、zh-HK 文化环境下检查简体名称与查找。
 文化环境测试不代替繁体 Windows 的实机验收。
+资源矩阵还检查三种完整组合的编码、名称、存档无修改保存和备份，三种不合法搭配的目录/打开/已打开文档保存拒绝，
+以及任一核心文件摘要变化时不覆盖存档。夹具、日志只写入新建的 `artifacts` 目录。
 
 发布前由主任务人工验收窗口布局、实际选档保存，以及游戏读入编辑副本。
 模型字节往返通过不代表剧情、任意队伍组合或改动属性后的完整游戏路线已实玩验收。
