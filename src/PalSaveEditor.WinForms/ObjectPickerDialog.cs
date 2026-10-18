@@ -8,10 +8,15 @@ internal sealed class ObjectPickerDialog : Form
     private readonly TextBox _search = new();
     private readonly ListBox _results = new();
     private readonly NumericUpDown _id = new();
+    private readonly Func<int, bool>? _filter;
+    private readonly bool _allowZero;
 
-    public ObjectPickerDialog(PalResourceCatalog? catalog, string title, ushort initialId = 0)
+    public ObjectPickerDialog(PalResourceCatalog? catalog, string title, ushort initialId = 0,
+        Func<int, bool>? filter = null, bool allowZero = false)
     {
         _catalog = catalog;
+        _filter = filter;
+        _allowZero = allowZero;
         Text = title;
         StartPosition = FormStartPosition.CenterParent;
         ShowInTaskbar = false;
@@ -44,8 +49,8 @@ internal sealed class ObjectPickerDialog : Form
         root.Controls.Add(_results, 0, 1);
 
         root.Controls.Add(new Label { Text = "对象编号：", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 2);
-        _id.Maximum = ushort.MaxValue;
-        _id.Value = initialId;
+        _id.Maximum = EditorEdition.IsGeshi ? GeshiSaveContract.ResourceObjectCount - 1 : ushort.MaxValue;
+        _id.Value = Math.Min(_id.Maximum, initialId);
         _id.Width = 140;
         root.Controls.Add(_id, 1, 2);
 
@@ -65,6 +70,16 @@ internal sealed class ObjectPickerDialog : Form
         Controls.Add(root);
         AcceptButton = ok;
         CancelButton = cancel;
+        FormClosing += (_, e) =>
+        {
+            if (DialogResult == DialogResult.OK && _filter is not null &&
+                !(_allowZero && SelectedId == 0) && !_filter(SelectedId))
+            {
+                e.Cancel = true;
+                DialogResult = DialogResult.None;
+                MessageBox.Show(this, "请选择当前列表中的有效对象编号。", "编号不适用", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        };
 
         _search.TextChanged += (_, _) => RefreshResults();
         _results.SelectedIndexChanged += (_, _) =>
@@ -100,7 +115,7 @@ internal sealed class ObjectPickerDialog : Form
                 return;
             }
 
-            foreach (var (id, name) in _catalog.SearchObjects(_search.Text, 300))
+            foreach (var (id, name) in _catalog.SearchObjects(_search.Text, 300, _filter))
             {
                 _results.Items.Add(new ObjectChoice(id, name));
             }

@@ -47,6 +47,8 @@ public sealed class PalResourceCatalog
 
     public static PalResourceCatalog? TryDiscover(string savePath)
     {
+        if (EditorEdition.IsGeshi)
+            return Load(GeshiSaveContract.LocateForSave(savePath).GameDirectory);
         var saveDirectory = Path.GetDirectoryName(Path.GetFullPath(savePath));
         if (saveDirectory is null)
         {
@@ -70,7 +72,15 @@ public sealed class PalResourceCatalog
         {
             throw new ArgumentException("游戏资料目录不能为空。", nameof(gameDirectory));
         }
-        var resourceContext = PalGameResourceContextResolver.Resolve(gameDirectory);
+        PalGameResourceContext resourceContext;
+        if (EditorEdition.IsGeshi)
+        {
+            var location = GeshiSaveContract.Locate(gameDirectory);
+            GeshiSaveContract.ValidateResources(location.ResourceDirectory);
+            resourceContext = new(location.GameDirectory, location.ResourceDirectory,
+                null, null, null, null, null, null, null);
+        }
+        else resourceContext = PalGameResourceContextResolver.Resolve(gameDirectory);
         var fullDirectory = resourceContext.ResourceDirectory;
         var wordPath = Path.Combine(fullDirectory, "WORD.DAT");
         if (!File.Exists(wordPath))
@@ -101,7 +111,7 @@ public sealed class PalResourceCatalog
         {
             eventObjectBytes = ReadMkfChunk(sssPath, 0).Length;
             var objectChunk = ReadMkfChunk(sssPath, 2);
-            recordSize = DetectObjectRecordSize(objectChunk.Length);
+            recordSize = EditorEdition.IsGeshi ? PalSaveLayout.DosObjectRecordSize : DetectObjectRecordSize(objectChunk.Length);
             if (recordSize != 0)
             {
                 objectRecordCount = objectChunk.Length / recordSize;
@@ -122,7 +132,7 @@ public sealed class PalResourceCatalog
             objectRecordCount,
             eventObjectBytes);
 
-        int runtimeObjectRecordCount = ResolveRuntimeObjectRecordCount(
+        int runtimeObjectRecordCount = EditorEdition.IsGeshi ? GeshiSaveContract.SaveObjectCount : ResolveRuntimeObjectRecordCount(
             resourceContext.SkillObjectsPath,
             recordSize,
             objectRecordCount,
@@ -156,6 +166,18 @@ public sealed class PalResourceCatalog
             objectRecordCount,
             runtimeObjectRecordCount,
             eventObjectBytes);
+        if (EditorEdition.IsGeshi)
+        {
+            byte[] magicData = ReadMkfChunk(Path.Combine(fullDirectory, "DATA.MKF"), 4);
+            byte[] objects = ReadMkfChunk(sssPath, 2);
+            if (objectRecordCount != GeshiSaveContract.ResourceObjectCount ||
+                eventObjectBytes != GeshiSaveContract.EventCount * 32 ||
+                magicData.Length != GeshiSaveContract.MagicDataCount * 32)
+                throw new InvalidDataException("隔世资源表结构与专用合同不一致。");
+            foreach (int id in Enumerable.Range(1, objectRecordCount).Where(GeshiSaveContract.IsMagic))
+                if (BinaryPrimitives.ReadUInt16LittleEndian(objects.AsSpan(id * 12, 2)) >= GeshiSaveContract.MagicDataCount)
+                    throw new InvalidDataException($"隔世法术 #{id} 超出 DATA.MKF 法术表。");
+        }
         if (resourceContext.GlobalSkillLibraryPath is not null)
         {
             using JsonDocument library = JsonDocument.Parse(File.ReadAllBytes(resourceContext.GlobalSkillLibraryPath));
@@ -192,13 +214,18 @@ public sealed class PalResourceCatalog
     public ushort GetObjectFlags(int objectId) =>
         _objectFlags is not null && (uint)objectId < (uint)_objectFlags.Length ? _objectFlags[objectId] : (ushort)0;
 
-    public IReadOnlyList<(ushort Id, string Name)> SearchObjects(string? query, int maximum = 200)
+    public bool IsItem(int id) => !EditorEdition.IsGeshi || GeshiSaveContract.IsItem(id);
+    public bool IsMagic(int id) => !EditorEdition.IsGeshi || GeshiSaveContract.IsMagic(id);
+    public bool IsEquipment(int id) => IsItem(id) && (!EditorEdition.IsGeshi || (GetObjectFlags(id) & 2) != 0);
+
+    public IReadOnlyList<(ushort Id, string Name)> SearchObjects(string? query, int maximum = 200, Func<int, bool>? filter = null)
     {
         var normalized = query?.Trim() ?? string.Empty;
         var result = new List<(ushort, string)>();
         var limit = Math.Min(_words.Length, ushort.MaxValue + 1);
         for (var id = 1; id < limit && result.Count < maximum; id++)
         {
+            if (filter is not null && !filter(id)) continue;
             var name = _words[id];
             if (string.IsNullOrWhiteSpace(name))
             {
