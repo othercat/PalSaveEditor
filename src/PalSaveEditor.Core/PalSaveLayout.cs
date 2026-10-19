@@ -39,7 +39,11 @@ public static class PalSaveLayout
     public const int ObjectOffset = 5664;
     public const int DosObjectRecordSize = 12;
     public const int WinObjectRecordSize = 14;
+#if GESHI_EDITION
+    public const int ObjectCount = 700;
+#else
     public const int ObjectCount = 600;
+#endif
     public const int EventObjectRecordSize = 32;
     public const int DosEventObjectOffset = ObjectOffset + DosObjectRecordSize * ObjectCount;
     public const int WinEventObjectOffset = ObjectOffset + WinObjectRecordSize * ObjectCount;

@@ -11,4 +11,12 @@
     <PackageLicenseExpression>GPL-2.0-only</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/othercat/PalSaveEditor</RepositoryUrl>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(GeshiEdition)' == 'true'">
+    <DefineConstants>$(DefineConstants);GESHI_EDITION</DefineConstants>
+    <BaseOutputPath>bin\Geshi\</BaseOutputPath>
+    <BaseIntermediateOutputPath>obj\Geshi\</BaseIntermediateOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin/**;obj/**</DefaultItemExcludes>
+    <Version>0.1.9</Version>
+    <Product>隔世追凶·简单 存档编辑器</Product>
+  </PropertyGroup>
 </Project>

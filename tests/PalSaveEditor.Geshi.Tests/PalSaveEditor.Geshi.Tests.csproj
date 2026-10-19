@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>PalSaveEditor.Geshi.Tests</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/PalSaveEditor.Core/PalSaveEditor.Core.csproj" />
+  </ItemGroup>
+  <Target Name="RequireGeshiEdition" BeforeTargets="BeforeBuild" Condition="'$(GeshiEdition)' != 'true'">
+    <Error Text="Build these tests with -p:GeshiEdition=true." />
+  </Target>
+</Project>

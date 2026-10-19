@@ -66,17 +66,21 @@ internal sealed class MainForm : Form
     private PalSkillRegistryResolution? _skillRegistryResolution;
     private string? _skillRegistryWarning;
     private bool _loadingControls;
+    private string? _defaultSaveDirectory;
+    private SplitContainer? _roleSplit;
+    private SplitContainer? _magicSplit;
+    private bool _geshiSplittersInitialized;
 
     public MainForm(string? initialPath)
     {
-        Text = "仙剑98编辑器";
+        Text = EditorEdition.ProductName;
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new(1_020, 700);
         ClientSize = new(1_180, 780);
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = new("Microsoft YaHei UI", 9F);
 
-        foreach (var format in new[]
+        foreach (var format in EditorEdition.IsGeshi ? new[] { SaveFormat.GeshiEasyDos } : new[]
                  {
                      SaveFormat.Auto,
                      SaveFormat.PalWin95,
@@ -88,6 +92,22 @@ internal sealed class MainForm : Form
             _formatCombo.Items.Add(new FormatChoice(format));
         }
         _formatCombo.SelectedIndex = 0;
+        if (EditorEdition.IsGeshi)
+        {
+            _roleName.ReadOnly = true;
+            _scene.Minimum = 1;
+            _scene.Maximum = 299;
+            try
+            {
+                var location = GeshiSaveContract.Locate(AppDomain.CurrentDomain.BaseDirectory);
+                _defaultSaveDirectory = location.SaveDirectory;
+                _status.Text = "请打开存档：" + _defaultSaveDirectory;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                _status.Text = exception.Message;
+            }
+        }
 
         var menu = BuildMenu();
         var toolStrip = BuildToolStrip();
@@ -109,11 +129,38 @@ internal sealed class MainForm : Form
         FormClosing += OnFormClosing;
         Shown += (_, _) =>
         {
+            if (EditorEdition.IsGeshi)
+                BeginInvoke(new Action(InitializeGeshiSplitters));
             if (!string.IsNullOrWhiteSpace(initialPath) && File.Exists(initialPath))
             {
                 OpenDocument(initialPath!);
             }
         };
+    }
+
+    private void InitializeGeshiSplitters()
+    {
+        if (_geshiSplittersInitialized || IsDisposed || _roleSplit is null || _magicSplit is null) return;
+        // SplitterDistance set on a new 150px-wide control is clamped before its
+        // parent has laid out. Apply the initial logical widths after Shown, when
+        // the actual monitor DPI and final docked widths are available.
+        PerformLayout();
+        SetInitialSplit(_roleSplit, 285, 360);
+        _roleSplit.Panel2.PerformLayout();
+        SetInitialSplit(_magicSplit, 300, 200);
+        _geshiSplittersInitialized = true;
+    }
+
+    private void SetInitialSplit(SplitContainer split, int logicalWidth, int otherPanelLogicalMinimum)
+    {
+        double scale = DeviceDpi / 96.0;
+        int maximum = split.ClientSize.Width - split.SplitterWidth - split.Panel2MinSize;
+        if (maximum < split.Panel1MinSize) return;
+        int preferredMaximum = split.ClientSize.Width - split.SplitterWidth -
+            (int)Math.Round(otherPanelLogicalMinimum * scale);
+        maximum = Math.Min(maximum, Math.Max(split.Panel1MinSize, preferredMaximum));
+        split.SplitterDistance = Math.Max(split.Panel1MinSize,
+            Math.Min(maximum, (int)Math.Round(logicalWidth * scale)));
     }
 
     private MenuStrip BuildMenu()
@@ -142,7 +189,9 @@ internal sealed class MainForm : Form
             MessageBoxIcon.Information));
         help.DropDownItems.Add("关于", null, (_, _) => MessageBox.Show(
             this,
-            "仙剑98编辑器\r\n支持：仙剑 98 柔情版、仙剑 DOS、梦幻 2.20 DOS 版和梦幻2.2显血版。\r\n可编辑固定自定义主角库、姓名、完整属性、隐藏属性和等级领悟表。\r\n梦幻2.2显血版：主播粉丝、孙小柔、othercat。",
+            EditorEdition.IsGeshi
+                ? "隔世追凶·简单 存档编辑器 0.1.8\r\n适用于本游戏包的原始与 SDLPAL 存档。\r\n六个角色槽、32 个法术槽；读取配套资源并统一显示简体名称。\r\n对象、事件和附加尾部原样保留。"
+                : "仙剑98编辑器\r\n支持：仙剑 98 柔情版、仙剑 DOS、梦幻 2.20 DOS 版和梦幻2.2显血版。\r\n可编辑固定自定义主角库、姓名、完整属性、隐藏属性和等级领悟表。\r\n梦幻2.2显血版：主播粉丝、孙小柔、othercat。",
             "关于",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information));
@@ -160,10 +209,13 @@ internal sealed class MainForm : Form
         strip.Items.Add(_saveAsButton);
         strip.Items.Add(new ToolStripSeparator());
         strip.Items.Add(_resourcesButton);
-        strip.Items.Add(_customRolesButton);
-        strip.Items.Add(new ToolStripSeparator());
-        strip.Items.Add(new ToolStripLabel("存档格式："));
-        strip.Items.Add(_formatCombo);
+        if (!EditorEdition.IsGeshi)
+        {
+            strip.Items.Add(_customRolesButton);
+            strip.Items.Add(new ToolStripSeparator());
+            strip.Items.Add(new ToolStripLabel("存档格式："));
+            strip.Items.Add(_formatCombo);
+        }
         strip.Items.Add(new ToolStripSeparator());
         strip.Items.Add(new ToolStripControlHost(_keepBackupCheckBox));
         return strip;
@@ -173,6 +225,7 @@ internal sealed class MainForm : Form
     {
         var tab = new TabPage("主要角色");
         var split = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 285, FixedPanel = FixedPanel.Panel1 };
+        _roleSplit = split;
 
         var left = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
         left.RowStyles.Add(new(SizeType.Percent, 58));
@@ -245,7 +298,7 @@ internal sealed class MainForm : Form
         AddNumericRow(propertyTable, 5, "吉运", AddRoleField(RoleField.FleeRate), "抗毒", AddRoleField(RoleField.PoisonResistance));
         AddNumericRow(propertyTable, 6, "合体法术编号", AddRoleField(RoleField.CooperativeMagic), "姓名字库编号", AddRoleField(RoleField.NameWordId));
         AddNumericRow(propertyTable, 7, "头像编号", AddRoleField(RoleField.Avatar), "战斗形象编号", AddRoleField(RoleField.BattleSprite));
-        AddNumericRow(propertyTable, 8, "地图形象编号", AddRoleField(RoleField.MapSprite), "行走帧上界（3=4 帧）", AddRoleField(RoleField.WalkFrames));
+        AddNumericRow(propertyTable, 8, "地图形象编号", AddRoleField(RoleField.MapSprite), EditorEdition.IsGeshi ? "每方向行走帧数（0=3）" : "行走帧上界（3=4 帧）", AddRoleField(RoleField.WalkFrames));
         propertyRoot.Controls.Add(propertyTable, 0, 0);
 
         var resistanceGroup = new GroupBox { Text = "五系基础抗性（可为负）", AutoSize = true, Dock = DockStyle.Fill, Padding = new(8, 4, 8, 6) };
@@ -275,6 +328,7 @@ internal sealed class MainForm : Form
             FixedPanel = FixedPanel.Panel1,
             SplitterDistance = 300,
         };
+        _magicSplit = lower;
         var magicGroup = new GroupBox { Text = "法术", Dock = DockStyle.Fill, Padding = new(8) };
         var magicRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
         magicRoot.RowStyles.Add(new(SizeType.Percent, 100));
@@ -408,6 +462,7 @@ internal sealed class MainForm : Form
         _roleCombo.SelectedIndexChanged += (_, _) => LoadSelectedRole();
         _roleName.Validated += (_, _) =>
         {
+            if (EditorEdition.IsGeshi) return;
             if (_loadingControls || _document is null || SelectedRoleId is not int roleId) return;
             RunUiAction(() =>
             {
@@ -469,9 +524,10 @@ internal sealed class MainForm : Form
 
         using var dialog = new OpenFileDialog
         {
-            Title = "打开仙剑存档",
+            Title = EditorEdition.IsGeshi ? "打开隔世追凶·简单存档" : "打开仙剑存档",
             Filter = "仙剑存档 (*.RPG)|*.RPG|所有文件 (*.*)|*.*",
             CheckFileExists = true,
+            InitialDirectory = _document is not null ? Path.GetDirectoryName(_document.Path) : _defaultSaveDirectory,
         };
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
@@ -488,8 +544,8 @@ internal sealed class MainForm : Form
             _saveButton.Enabled = true;
             _saveAsButton.Enabled = true;
             _resourcesButton.Enabled = true;
-            _customRolesButton.Enabled = true;
-            _formatCombo.Enabled = true;
+            _customRolesButton.Enabled = !EditorEdition.IsGeshi;
+            _formatCombo.Enabled = !EditorEdition.IsGeshi;
             RefreshAll();
             if (!string.IsNullOrWhiteSpace(_document.ExtendedMagicSidecarWarning))
             {
@@ -566,7 +622,7 @@ internal sealed class MainForm : Form
             {
                 _status.Text += $"；{_document.ExtendedMagicSidecarWarning}";
             }
-            Text = $"仙剑98编辑器 - [{Path.GetFileName(result.TargetPath)}]";
+            Text = $"{EditorEdition.ProductName} - [{Path.GetFileName(result.TargetPath)}]";
             UpdateDirtyState();
         }, "另存失败");
     }
@@ -580,7 +636,7 @@ internal sealed class MainForm : Form
 
         using var dialog = new FolderBrowserDialog
         {
-            Description = "选择包含 WORD.DAT 和 SSS.MKF 的仙剑游戏资料目录",
+            Description = EditorEdition.IsGeshi ? "选择隔世追凶·简单的游戏根目录或 PAL 资源目录" : "选择包含 WORD.DAT 和 SSS.MKF 的仙剑游戏资料目录",
             SelectedPath = _document.Catalog?.SourceDirectory ?? Path.GetDirectoryName(_document.Path) ?? string.Empty,
         };
 #if !NETFRAMEWORK
@@ -601,6 +657,7 @@ internal sealed class MainForm : Form
 
     private void OpenCustomRoleLibrary()
     {
+        if (EditorEdition.IsGeshi) return;
         if (_document is null) return;
         if (_document.IsDirty)
         {
@@ -635,7 +692,7 @@ internal sealed class MainForm : Form
         _loadingControls = true;
         try
         {
-            Text = $"仙剑98编辑器 - [{Path.GetFileName(_document.Path)}]";
+            Text = $"{EditorEdition.ProductName} - [{Path.GetFileName(_document.Path)}]";
             var formatIndex = _formatCombo.Items.Cast<FormatChoice>().ToList().FindIndex(choice => choice.Format == _document.Format);
             _formatCombo.SelectedIndex = Math.Max(0, formatIndex);
             RefreshRoleChoices();
@@ -816,15 +873,16 @@ internal sealed class MainForm : Form
             return;
         }
 
-        var eventOffset = _document.Format is SaveFormat.PalDos or SaveFormat.Dream220Dos
+        var eventOffset = _document.Format is SaveFormat.PalDos or SaveFormat.Dream220Dos or SaveFormat.GeshiEasyDos
             ? PalSaveLayout.DosEventObjectOffset
             : PalSaveLayout.WinEventObjectOffset;
-        var eventCount = (_document.Length - eventOffset) / 32;
+        var eventCount = EditorEdition.IsGeshi ? GeshiSaveContract.EventCount : (_document.Length - eventOffset) / 32;
         _formatInfo.Text =
             $"当前格式：{_document.Format.GetDisplayName()}\r\n" +
             $"文件长度：{_document.Length:N0} 字节\r\n" +
             $"固定前缀：{eventOffset:N0} 字节\r\n" +
             $"事件记录：{eventCount:N0} × 32 字节\r\n\r\n" +
+            (EditorEdition.IsGeshi ? $"附加尾部：{_document.Length - GeshiSaveContract.MinimumSaveLength:N0} 字节（原样保留）\r\n\r\n" : string.Empty) +
             $"识别依据：{_document.Detection.Reason}\r\n" +
             $"证据强度：{(_document.Detection.IsHeuristic ? "长度/边界启发式，可手动复核" : "配套资源复核")}";
         _resourceInfo.Text = _document.Catalog is null
@@ -843,6 +901,7 @@ internal sealed class MainForm : Form
     {
         _skillRegistryResolution = null;
         _skillRegistryWarning = null;
+        if (EditorEdition.IsGeshi) return;
         if (_document?.Catalog is not PalResourceCatalog resources)
         {
             return;
@@ -1067,10 +1126,18 @@ internal sealed class MainForm : Form
         numeric.Minimum = 1;
         numeric.Value = initialValue == 0 ? 1 : initialValue;
         var presets = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
-        presets.Items.Add(new FollowerPreset("天鬼皇", 12));
-        presets.Items.Add(new FollowerPreset("云姨", 81));
-        presets.Items.Add(new FollowerPreset("自定义（保留当前编号）", null));
-        presets.SelectedIndex = initialValue == 12 ? 0 : initialValue == 81 ? 1 : 2;
+        if (EditorEdition.IsGeshi)
+        {
+            presets.Items.Add(new FollowerPreset("隔世资源 MGO 编号", null));
+            presets.SelectedIndex = 0;
+        }
+        else
+        {
+            presets.Items.Add(new FollowerPreset("天鬼皇", 12));
+            presets.Items.Add(new FollowerPreset("云姨", 81));
+            presets.Items.Add(new FollowerPreset("自定义（保留当前编号）", null));
+            presets.SelectedIndex = initialValue == 12 ? 0 : initialValue == 81 ? 1 : 2;
+        }
         presets.SelectedIndexChanged += (_, _) =>
         {
             if (presets.SelectedItem is FollowerPreset preset && preset.SpriteId is ushort value)
@@ -1130,7 +1197,8 @@ internal sealed class MainForm : Form
         }
         else
         {
-            using var dialog = new ObjectPickerDialog(_document.Catalog, "添加法术");
+            using var dialog = new ObjectPickerDialog(_document.Catalog, "添加法术",
+                filter: EditorEdition.IsGeshi ? _document.Catalog!.IsMagic : null);
             result = dialog.ShowDialog(this);
             selectedId = dialog.SelectedId;
         }
@@ -1162,12 +1230,16 @@ internal sealed class MainForm : Form
         {
             return;
         }
-        using var dialog = new ObjectPickerDialog(_document.Catalog, $"更换{EquipmentSlotNames[equipment.Slot]}", equipment.ItemId);
+        using var dialog = new ObjectPickerDialog(_document.Catalog, $"更换{EquipmentSlotNames[equipment.Slot]}", equipment.ItemId,
+            EditorEdition.IsGeshi ? _document.Catalog!.IsEquipment : null, allowZero: true);
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
-            _document.SetEquipment(roleId, equipment.Slot, dialog.SelectedId);
-            LoadSelectedRole();
-            UpdateDirtyState();
+            RunUiAction(() =>
+            {
+                _document.SetEquipment(roleId, equipment.Slot, dialog.SelectedId);
+                LoadSelectedRole();
+                UpdateDirtyState();
+            });
         }
     }
 
@@ -1177,9 +1249,11 @@ internal sealed class MainForm : Form
         {
             return;
         }
-        using var picker = new ObjectPickerDialog(_document.Catalog, "添加物品");
+        using var picker = new ObjectPickerDialog(_document.Catalog, "添加物品",
+            filter: EditorEdition.IsGeshi ? _document.Catalog!.IsItem : null);
         if (picker.ShowDialog(this) != DialogResult.OK) return;
-        using var amount = new NumericPromptDialog("添加物品", "数量：", 1);
+        using var amount = new NumericPromptDialog("添加物品", "数量：", 1,
+            EditorEdition.IsGeshi ? GeshiSaveContract.MaximumInventoryAmount : ushort.MaxValue);
         if (amount.ShowDialog(this) != DialogResult.OK) return;
         RunUiAction(() =>
         {
@@ -1195,12 +1269,16 @@ internal sealed class MainForm : Form
         {
             return;
         }
-        using var amount = new NumericPromptDialog($"编辑 {entry.DisplayName}", "数量：", entry.Amount);
+        using var amount = new NumericPromptDialog($"编辑 {entry.DisplayName}", "数量：", entry.Amount,
+            EditorEdition.IsGeshi ? GeshiSaveContract.MaximumInventoryAmount : ushort.MaxValue);
         if (amount.ShowDialog(this) == DialogResult.OK)
         {
-            _document.SetInventorySlot(entry.Slot, entry.ItemId, decimal.ToUInt16(amount.SelectedValue), Math.Min(entry.AmountInUse, decimal.ToUInt16(amount.SelectedValue)));
-            RefreshInventory();
-            UpdateDirtyState();
+            RunUiAction(() =>
+            {
+                _document.SetInventorySlot(entry.Slot, entry.ItemId, decimal.ToUInt16(amount.SelectedValue), Math.Min(entry.AmountInUse, decimal.ToUInt16(amount.SelectedValue)));
+                RefreshInventory();
+                UpdateDirtyState();
+            }, "无法修改物品数量");
         }
     }
 

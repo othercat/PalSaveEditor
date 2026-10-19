@@ -19,6 +19,16 @@ public static class SaveFormatDetector
         int objectRecordSize = 0,
         int eventObjectBytes = 0)
     {
+        if (EditorEdition.IsGeshi)
+        {
+            if (wordDatLength != 5880 || objectRecordSize != 12 ||
+                eventObjectBytes != GeshiSaveContract.EventCount * 32 ||
+                fileLength < GeshiSaveContract.MinimumSaveLength)
+                throw new InvalidDataException("存档或配套资源不符合隔世追凶·简单的 700 对象 DOS 合同。");
+            return new(SaveFormat.GeshiEasyDos,
+                "已验证隔世四资源 SHA256；700×12 字节对象、5632×32 字节事件，附加尾部原样保留。",
+                false, [SaveFormat.GeshiEasyDos]);
+        }
         if (fileLength < PalSaveLayout.DosEventObjectOffset)
         {
             throw new InvalidDataException(

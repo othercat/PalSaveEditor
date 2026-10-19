@@ -31,6 +31,18 @@ public sealed class PalSaveDocument
             ?? System.IO.Path.GetDirectoryName(Path)
             ?? Environment.CurrentDirectory;
         _usesNativeMagicSlots = UsesNativeMagicSlots(gameDirectory, catalog);
+        if (EditorEdition.IsGeshi)
+        {
+            // PALDLL JSON is neither read nor written by the SDL edition.
+            _extendedMagics = ExtendedRoleMagicState.FromPhysicalPage0(_bytes);
+            _originalExtendedMagics = _extendedMagics.Clone();
+            _customRoleGameDirectory = gameDirectory;
+            CustomRoleLibrary = new PalCustomRoleLibrary();
+            _customRoleState = PalCustomRoleSaveState.CreateInitial(CustomRoleLibrary);
+            _originalCustomRoleState = _customRoleState.Clone();
+            _originalCustomRoleLibrary = CustomRoleLibrary.Clone();
+            return;
+        }
         HasExtendedMagicSidecar = ExtendedRoleMagicSidecar.TryLoad(
             Path, _bytes, out _extendedMagics, out var sidecarWarning);
         if (_usesNativeMagicSlots)
@@ -85,7 +97,7 @@ public sealed class PalSaveDocument
     public bool HasCustomRoleSaveState { get; private set; }
     public string? CustomRoleLibraryWarning { get; }
     public string? CustomRoleSaveStateWarning { get; private set; }
-    public int RuntimeRoleCount => CustomRoleLibrary.RuntimeRoleCount;
+    public int RuntimeRoleCount => EditorEdition.IsGeshi ? PalSaveLayout.RoleCount : CustomRoleLibrary.RuntimeRoleCount;
     public string CustomRoleLibraryPath =>
         PalCustomRoleLibraryStore.GetPath(_customRoleGameDirectory);
     public int MagicCapacity => _usesNativeMagicSlots
@@ -143,6 +155,7 @@ public sealed class PalSaveDocument
             catalog?.EventObjectBytes ?? 0);
         var format = requestedFormat == SaveFormat.Auto ? detection.Format : requestedFormat;
         ValidateFormat(bytes.Length, format);
+        if (EditorEdition.IsGeshi) GeshiSaveContract.ValidateSave(bytes);
         return new(fullPath, bytes, format, detection, catalog);
     }
 
@@ -201,9 +214,9 @@ public sealed class PalSaveDocument
         {
             throw new ArgumentNullException(nameof(roleIds));
         }
-        if (roleIds.Count is < 1 or > 3)
+        if (roleIds.Count < 1 || roleIds.Count > EditorEdition.MaximumPartyCount)
         {
-            throw new ArgumentOutOfRangeException(nameof(roleIds), "当前运行时队伍人数必须为 1 到 3；四/五人战斗尚未启用。 ");
+            throw new ArgumentOutOfRangeException(nameof(roleIds), $"当前运行时队伍人数必须为 1 到 {EditorEdition.MaximumPartyCount}。 ");
         }
 
         if (roleIds.Any(id => id >= RuntimeRoleCount))
@@ -337,7 +350,7 @@ public sealed class PalSaveDocument
         ValidateRole(roleId);
         var nameWordId = GetRoleField(roleId, RoleField.NameWordId);
         string displayName = roleId < PalSaveLayout.RoleCount
-            ? CustomRoleLibrary.NativeRoleNames.TryGetValue(roleId, out string? nativeName)
+            ? !EditorEdition.IsGeshi && CustomRoleLibrary.NativeRoleNames.TryGetValue(roleId, out string? nativeName)
                 ? nativeName
                 : Catalog?.GetRoleName(roleId, nameWordId) ?? $"角色 {roleId}"
             : CustomRoleLibrary.CustomRoles[roleId - PalSaveLayout.RoleCount].DisplayName;
@@ -362,6 +375,8 @@ public sealed class PalSaveDocument
 
     public void SetRoleDisplayName(int roleId, string displayName)
     {
+        if (EditorEdition.IsGeshi)
+            throw new NotSupportedException("隔世姓名来自 WORD.DAT；此版本不写入 PALDLL 自定义角色库。");
         ValidateRole(roleId);
         PalCustomRoleLibraryStore.ValidateRoleName(displayName, $"role[{roleId}]");
         if (roleId < PalSaveLayout.RoleCount)
@@ -475,6 +490,8 @@ public sealed class PalSaveDocument
     public void AddMagic(int roleId, ushort magicId)
     {
         ValidateRole(roleId);
+        if (EditorEdition.IsGeshi && !GeshiSaveContract.IsMagic(magicId))
+            throw new InvalidDataException($"对象 #{magicId} 不是隔世可用法术。");
         if (magicId == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(magicId));
@@ -524,6 +541,8 @@ public sealed class PalSaveDocument
     public void RemoveMagic(int roleId, int magicSlot)
     {
         ValidateRole(roleId);
+        if (EditorEdition.IsGeshi && (uint)magicSlot >= PalSaveLayout.MagicCapacity)
+            throw new ArgumentOutOfRangeException(nameof(magicSlot));
         if (roleId >= PalSaveLayout.RoleCount)
         {
             if ((uint)magicSlot >= PalSaveLayout.MagicCapacity)
@@ -571,6 +590,8 @@ public sealed class PalSaveDocument
             throw new ArgumentNullException(nameof(magicIds));
         }
         ushort[] values = magicIds.Where(value => value != 0).Distinct().ToArray();
+        if (EditorEdition.IsGeshi && values.Any(value => !GeshiSaveContract.IsMagic(value)))
+            throw new InvalidDataException("法术列表包含隔世非技能对象。");
         int capacity = roleId < PalSaveLayout.RoleCount
             ? MagicCapacity
             : PalSaveLayout.MagicCapacity;
@@ -613,6 +634,8 @@ public sealed class PalSaveDocument
     public void SetEquipment(int roleId, int slot, ushort itemId)
     {
         ValidateRole(roleId);
+        if (EditorEdition.IsGeshi && itemId != 0 && Catalog?.IsEquipment(itemId) != true)
+            throw new InvalidDataException($"对象 #{itemId} 不是隔世可装备物品。");
         if ((uint)slot >= PalSaveLayout.EquipmentCount)
         {
             throw new ArgumentOutOfRangeException(nameof(slot));
@@ -652,11 +675,16 @@ public sealed class PalSaveDocument
     public void SetInventorySlot(int slot, ushort itemId, ushort amount, ushort amountInUse = 0)
     {
         ValidateInventorySlot(slot);
+        if (EditorEdition.IsGeshi && amount > GeshiSaveContract.MaximumInventoryAmount)
+            throw new ArgumentOutOfRangeException(nameof(amount), "隔世物品新编辑数量不能超过 99。");
         if (itemId == 0 || amount == 0)
         {
             ClearInventorySlot(slot);
             return;
         }
+
+        if (EditorEdition.IsGeshi && !GeshiSaveContract.IsItem(itemId))
+            throw new InvalidDataException($"对象 #{itemId} 不是隔世物品；法术不能写入背包。");
 
         if (amountInUse > amount)
         {
@@ -678,6 +706,8 @@ public sealed class PalSaveDocument
 
     public int AddInventoryItem(ushort itemId, ushort amount)
     {
+        if (EditorEdition.IsGeshi && amount > GeshiSaveContract.MaximumInventoryAmount)
+            throw new ArgumentOutOfRangeException(nameof(amount), "隔世物品添加数量不能超过 99。");
         if (itemId == 0 || amount == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(itemId));
@@ -687,6 +717,8 @@ public sealed class PalSaveDocument
         var existing = entries.FirstOrDefault(entry => entry.ItemId == itemId);
         if (existing is not null)
         {
+            if (EditorEdition.IsGeshi && existing.Amount + amount > GeshiSaveContract.MaximumInventoryAmount)
+                throw new ArgumentOutOfRangeException(nameof(amount), $"物品 #{itemId} 累加后的数量不能超过 99。");
             var combined = checked((ushort)Math.Min(ushort.MaxValue, existing.Amount + amount));
             SetInventorySlot(existing.Slot, itemId, combined, existing.AmountInUse);
             return existing.Slot;
@@ -717,6 +749,7 @@ public sealed class PalSaveDocument
 
     public static bool UsesNativeMagicSlots(string gameDirectory, PalResourceCatalog? catalog)
     {
+        if (EditorEdition.IsGeshi) return true;
         if (catalog?.ResourceContext.GlobalSkillLibraryPath is not null) return true;
         string dll = System.IO.Path.Combine(gameDirectory, "PAL.dll");
         if (!File.Exists(dll)) return false;
@@ -727,6 +760,14 @@ public sealed class PalSaveDocument
 
     public SaveWriteResult Save(string? targetPath = null, bool createBackup = true)
     {
+        if (EditorEdition.IsGeshi)
+        {
+            if (Catalog is null) throw new InvalidOperationException("未验证隔世资源，不能保存。");
+            GeshiSaveContract.ValidateResources(Catalog.SourceDirectory);
+            GeshiSaveContract.ValidateSave(_bytes);
+            if (CustomRoleLibrary.CustomRoles.Count != 0 || CustomRoleLibrary.NativeRoleNames.Count != 0)
+                throw new NotSupportedException("隔世专用版不支持 PALDLL 自定义角色或姓名覆盖。");
+        }
         if (!string.IsNullOrWhiteSpace(CustomRoleSaveStateWarning) &&
             HasCustomRoleLibrary && CustomRoleLibrary.CustomRoles.Count != 0)
         {
@@ -751,6 +792,13 @@ public sealed class PalSaveDocument
             ?? throw new InvalidOperationException("无法确定目标目录。");
         Directory.CreateDirectory(directory);
         bool destinationExisted = File.Exists(destination);
+        if (EditorEdition.IsGeshi && destinationExisted)
+        {
+            byte[] current = File.ReadAllBytes(destination);
+            GeshiSaveContract.ValidateSave(current);
+            if (savesToOriginalPath && !current.AsSpan().SequenceEqual(_originalBytes))
+                throw new IOException("存档已被游戏或其他程序修改，请重新打开后再编辑；未覆盖新进度。");
+        }
         string? rollbackPath = destinationExisted
             ? createBackup
                 ? SaveBackupPaths.Create(destination)
@@ -790,7 +838,7 @@ public sealed class PalSaveDocument
                 throw new IOException("保存后的文件与待写入数据不一致。 ");
             }
 
-            if (ExtendedRoleMagicSidecar.SupportsPath(destination))
+            if (!EditorEdition.IsGeshi && ExtendedRoleMagicSidecar.SupportsPath(destination))
             {
                 if (_extendedMagics.HasExtendedPayload)
                 {
@@ -817,7 +865,7 @@ public sealed class PalSaveDocument
                     : null;
             }
 
-            if (HasCustomRoleLibrary && CustomRoleLibrary.CustomRoles.Count != 0)
+            if (!EditorEdition.IsGeshi && HasCustomRoleLibrary && CustomRoleLibrary.CustomRoles.Count != 0)
             {
                 RememberCompanion(PalCustomRoleSaveStateStore.GetPath(destination));
                 PalCustomRoleSaveStateStore.WriteAtomically(
@@ -827,7 +875,7 @@ public sealed class PalSaveDocument
                 CustomRoleSaveStateWarning = null;
             }
 
-            if (!CustomRoleLibrary.ContentEquals(_originalCustomRoleLibrary))
+            if (!EditorEdition.IsGeshi && !CustomRoleLibrary.ContentEquals(_originalCustomRoleLibrary))
             {
                 RememberCompanion(PalCustomRoleLibraryStore.GetPath(_customRoleGameDirectory));
                 PalCustomRoleLibraryStore.WriteAtomically(
@@ -894,6 +942,12 @@ public sealed class PalSaveDocument
 
     private static void ValidateFormat(int length, SaveFormat format)
     {
+        if (EditorEdition.IsGeshi)
+        {
+            if (format != SaveFormat.GeshiEasyDos || length < GeshiSaveContract.MinimumSaveLength)
+                throw new InvalidDataException("隔世专用版仅打开 700 对象 DOS 存档，不提供格式转换。");
+            return;
+        }
         var minimum = format is SaveFormat.PalDos or SaveFormat.Dream220Dos
             ? PalSaveLayout.DosEventObjectOffset
             : PalSaveLayout.WinEventObjectOffset;
