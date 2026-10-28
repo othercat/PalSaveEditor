@@ -5,16 +5,16 @@ internal static class MaintenanceProfileTests
 {
     internal static int Run(string[] args)
     {
-        if (args.Length != 4 || Directory.Exists(args[3])) throw new ArgumentException("Three read-only native fixture roots and one fresh output directory required.");
-        string[] expected = ["dream222-normal", "dream222-hard", "dreamspace39x-hard"];
+        if (args.Length is not (4 or 5) || Directory.Exists(args[args.Length - 1])) throw new ArgumentException("Three or four read-only native fixture roots and one fresh output directory required.");
+        string[] expected = args.Length == 5 ? ["dream222-normal", "dream222-hard", "dreamspace39x-hard", "dream22-puppet100"] : ["dream222-normal", "dream222-hard", "dreamspace39x-hard"];
         int checks = 0;
         void Check(bool ok, string message) { if (!ok) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
         void Reject(Action action, string message) { try { action(); } catch (InvalidDataException) { Check(true, message); return; } throw new Exception(message); }
         var roots = new List<string>();
-        for (int i = 0; i < 3; ++i)
+        for (int i = 0; i < expected.Length; ++i)
         {
             var location = GeshiSaveContract.Locate(args[i]);
-            string root = Path.Combine(args[3], expected[i]); roots.Add(root);
+            string root = Path.Combine(args[args.Length - 1], expected[i]); roots.Add(root);
             Directory.CreateDirectory(Path.Combine(root, "PAL")); Directory.CreateDirectory(Path.Combine(root, "save", expected[i]));
             foreach (string file in new[] { "SSS.MKF", "DATA.MKF", "WORD.DAT", "M.MSG" })
                 File.Copy(Path.Combine(location.ResourceDirectory, file), Path.Combine(root, "PAL", file));

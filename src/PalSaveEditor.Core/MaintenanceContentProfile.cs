@@ -26,6 +26,13 @@ public sealed record MaintenanceContentProfile(string Id, string Name, int Objec
             [295, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 325, 326, 327, 328, 329, 330, 332, 333, 334, 335, 337, 338, 339, 340, 341, 342, 344, 348, 349, 350, 351, 352, 353, 355, 356, 357, 358, 359, 362, 363, 364, 365, 367, 368, 369, 371, 372, 373, 374, 375, 377, 379, 380, 381, 382, 383, 384, 385, 390, 395, 396, 566, 567, 568, 569, 570, 571, 580, 588]),
             ["64641ce5984f82f208a42d633aa84981155267a59ab6e78c445859b67a32e8af", "9bff164acc41c953427d8a1611030ce3f635331099c5cc01ce21212f306bbbd7", "2717fd9f663462ad022f3feb42f4b9cc6441dcc76c29798a51196bc69c73ca21", "aa97fbde3511651cf36b1e6602fc28c40dc473992bce6253b8a61b3bf7b2d538"]),
     ];
+    // The 2.2 DOS object table is byte-identical to 2.2.2. Independent script,
+    // store, role and instantiated-enemy references confirm the same 237 items
+    // and 85 learnable spells (sdlpal-lostedit #141 source/editor-id-audit.json).
+    private static readonly (MaintenanceContentProfile Profile, string[] Hashes) Dream22 =
+        (Dreams[0].Profile with { Id = "dream22-puppet100", Name = "仙剑梦幻2.2 傀儡100%" },
+        ["bfd6dd446d25a9b7c62b1ffed1bca1dc75f98181f93f1c9726ac2155d0d54a0b", "a4632ffbcd6b731274120594de152b546ea30e5f679637c1832bf05f4ddc5697", "6673af27ea1f05b043fb947ec47e11b5e7b8d048eee66f9bd11eea75e3ba578b", "ba0ddebed7896e5e04ba8093b7371b1cf1d90768234a2a8acda61e157e60f939"]);
+
     internal static MaintenanceContentProfile? FindDream(string directory)
     {
         string[] names = ["SSS.MKF", "DATA.MKF", "WORD.DAT", "M.MSG"];
@@ -37,6 +44,7 @@ public sealed record MaintenanceContentProfile(string Id, string Name, int Objec
             using var sha = SHA256.Create(); using var stream = File.OpenRead(path);
             hashes.Add(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant());
         }
+        if (Dream22.Hashes.SequenceEqual(hashes)) return Dream22.Profile;
         return Dreams.FirstOrDefault(d => d.Hashes.SequenceEqual(hashes)).Profile;
     }
     public static MaintenanceContentProfile Resolve(string directory)
