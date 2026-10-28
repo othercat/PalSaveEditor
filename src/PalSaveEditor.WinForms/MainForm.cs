@@ -876,13 +876,13 @@ internal sealed class MainForm : Form
         var eventOffset = _document.Format is SaveFormat.PalDos or SaveFormat.Dream220Dos or SaveFormat.GeshiEasyDos
             ? PalSaveLayout.DosEventObjectOffset
             : PalSaveLayout.WinEventObjectOffset;
-        var eventCount = EditorEdition.IsGeshi ? GeshiSaveContract.EventCount : (_document.Length - eventOffset) / 32;
+        var eventCount = EditorEdition.IsGeshi ? _document.Catalog!.ContentProfile!.EventCount : (_document.Length - eventOffset) / 32;
         _formatInfo.Text =
             $"当前格式：{_document.Format.GetDisplayName()}\r\n" +
             $"文件长度：{_document.Length:N0} 字节\r\n" +
             $"固定前缀：{eventOffset:N0} 字节\r\n" +
             $"事件记录：{eventCount:N0} × 32 字节\r\n\r\n" +
-            (EditorEdition.IsGeshi ? $"附加尾部：{_document.Length - GeshiSaveContract.MinimumSaveLength:N0} 字节（原样保留）\r\n\r\n" : string.Empty) +
+            (EditorEdition.IsGeshi ? $"附加尾部：{_document.Length - _document.Catalog!.ContentProfile!.MinimumSaveLength:N0} 字节（原样保留）\r\n\r\n" : string.Empty) +
             $"识别依据：{_document.Detection.Reason}\r\n" +
             $"证据强度：{(_document.Detection.IsHeuristic ? "长度/边界启发式，可手动复核" : "配套资源复核")}";
         _resourceInfo.Text = _document.Catalog is null
@@ -936,7 +936,7 @@ internal sealed class MainForm : Form
         string profile = catalog.IsActiveProfile
             ? $"active profile {catalog.ActiveProfileId}@{catalog.ActiveProfileVersion}（{catalog.ActiveProfileDisplayName}）  |  "
             : string.Empty;
-        return $"游戏资料：{profile}{catalog.SourceDirectory}  |  WORD {catalog.WordCount} 条  |  " +
+        return $"游戏资料：{catalog.ContentProfile?.Name} {profile}{catalog.SourceDirectory}  |  WORD {catalog.WordCount} 条  |  " +
                $"对象记录 {catalog.ObjectRecordSize} 字节  |  事件区 {catalog.EventObjectBytes:N0} 字节";
     }
 

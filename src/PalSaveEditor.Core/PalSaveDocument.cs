@@ -155,7 +155,10 @@ public sealed class PalSaveDocument
             catalog?.EventObjectBytes ?? 0);
         var format = requestedFormat == SaveFormat.Auto ? detection.Format : requestedFormat;
         ValidateFormat(bytes.Length, format);
-        if (EditorEdition.IsGeshi) GeshiSaveContract.ValidateSave(bytes);
+        if (EditorEdition.IsGeshi) {
+            GeshiSaveContract.ValidateSave(bytes, catalog!.ContentProfile);
+            MaintenanceContentProfile.ValidateLocation(fullPath, catalog);
+        }
         return new(fullPath, bytes, format, detection, catalog);
     }
 
@@ -172,6 +175,8 @@ public sealed class PalSaveDocument
 
     public void SetCatalog(PalResourceCatalog catalog)
     {
+        if (EditorEdition.IsGeshi && Catalog?.ContentProfile?.Id != catalog?.ContentProfile?.Id)
+            throw new InvalidDataException("不能为已打开存档更换内容身份。请重新打开对应存档。");
         if (catalog is null)
         {
             throw new ArgumentNullException(nameof(catalog));
@@ -490,7 +495,7 @@ public sealed class PalSaveDocument
     public void AddMagic(int roleId, ushort magicId)
     {
         ValidateRole(roleId);
-        if (EditorEdition.IsGeshi && !GeshiSaveContract.IsMagic(magicId))
+        if (EditorEdition.IsGeshi && !Catalog!.IsMagic(magicId))
             throw new InvalidDataException($"对象 #{magicId} 不是隔世可用法术。");
         if (magicId == 0)
         {
@@ -590,7 +595,7 @@ public sealed class PalSaveDocument
             throw new ArgumentNullException(nameof(magicIds));
         }
         ushort[] values = magicIds.Where(value => value != 0).Distinct().ToArray();
-        if (EditorEdition.IsGeshi && values.Any(value => !GeshiSaveContract.IsMagic(value)))
+        if (EditorEdition.IsGeshi && values.Any(value => !Catalog!.IsMagic(value)))
             throw new InvalidDataException("法术列表包含隔世非技能对象。");
         int capacity = roleId < PalSaveLayout.RoleCount
             ? MagicCapacity
@@ -683,7 +688,7 @@ public sealed class PalSaveDocument
             return;
         }
 
-        if (EditorEdition.IsGeshi && !GeshiSaveContract.IsItem(itemId))
+        if (EditorEdition.IsGeshi && !Catalog!.IsItem(itemId))
             throw new InvalidDataException($"对象 #{itemId} 不是隔世物品；法术不能写入背包。");
 
         if (amountInUse > amount)
@@ -763,8 +768,10 @@ public sealed class PalSaveDocument
         if (EditorEdition.IsGeshi)
         {
             if (Catalog is null) throw new InvalidOperationException("未验证隔世资源，不能保存。");
-            GeshiSaveContract.ValidateResources(Catalog.SourceDirectory);
-            GeshiSaveContract.ValidateSave(_bytes);
+            if (MaintenanceContentProfile.Resolve(Catalog.SourceDirectory).Id != Catalog.ContentProfile!.Id)
+                throw new InvalidDataException("资源已切换，未保存当前存档。请重新打开对应存档。");
+            MaintenanceContentProfile.ValidateLocation(targetPath ?? Path, Catalog);
+            GeshiSaveContract.ValidateSave(_bytes, Catalog!.ContentProfile);
             if (CustomRoleLibrary.CustomRoles.Count != 0 || CustomRoleLibrary.NativeRoleNames.Count != 0)
                 throw new NotSupportedException("隔世专用版不支持 PALDLL 自定义角色或姓名覆盖。");
         }
@@ -795,7 +802,7 @@ public sealed class PalSaveDocument
         if (EditorEdition.IsGeshi && destinationExisted)
         {
             byte[] current = File.ReadAllBytes(destination);
-            GeshiSaveContract.ValidateSave(current);
+            GeshiSaveContract.ValidateSave(current, Catalog!.ContentProfile);
             if (savesToOriginalPath && !current.AsSpan().SequenceEqual(_originalBytes))
                 throw new IOException("存档已被游戏或其他程序修改，请重新打开后再编辑；未覆盖新进度。");
         }
@@ -944,7 +951,7 @@ public sealed class PalSaveDocument
     {
         if (EditorEdition.IsGeshi)
         {
-            if (format != SaveFormat.GeshiEasyDos || length < GeshiSaveContract.MinimumSaveLength)
+            if (format != SaveFormat.GeshiEasyDos || length < GeshiSaveContract.EventOffset)
                 throw new InvalidDataException("隔世专用版仅打开 700 对象 DOS 存档，不提供格式转换。");
             return;
         }

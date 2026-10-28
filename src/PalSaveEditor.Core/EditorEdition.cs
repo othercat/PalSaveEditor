@@ -5,7 +5,7 @@ public static class EditorEdition
 {
 #if GESHI_EDITION
     public static bool IsGeshi => true;
-    public const string ProductName = "隔世追凶·简单 存档编辑器";
+    public const string ProductName = "SDLPal 存档编辑器";
 #else
     public static bool IsGeshi => false;
     public const string ProductName = "仙剑98编辑器";

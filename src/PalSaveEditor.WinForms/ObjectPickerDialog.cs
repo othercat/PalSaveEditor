@@ -49,7 +49,7 @@ internal sealed class ObjectPickerDialog : Form
         root.Controls.Add(_results, 0, 1);
 
         root.Controls.Add(new Label { Text = "对象编号：", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 2);
-        _id.Maximum = EditorEdition.IsGeshi ? GeshiSaveContract.ResourceObjectCount - 1 : ushort.MaxValue;
+        _id.Maximum = EditorEdition.IsGeshi ? (catalog?.ObjectRecordCount ?? GeshiSaveContract.ResourceObjectCount) - 1 : ushort.MaxValue;
         _id.Value = Math.Min(_id.Maximum, initialId);
         _id.Width = 140;
         root.Controls.Add(_id, 1, 2);
