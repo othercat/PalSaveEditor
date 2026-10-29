@@ -26,7 +26,7 @@ public sealed class PalSaveDocument
         _bytes = bytes;
         Format = format;
         Detection = detection;
-        Catalog = catalog;
+        Catalog = catalog?.ForSave(bytes);
         string gameDirectory = catalog?.ResourceContext.GameDirectory
             ?? System.IO.Path.GetDirectoryName(Path)
             ?? Environment.CurrentDirectory;
@@ -152,9 +152,10 @@ public sealed class PalSaveDocument
             bytes.Length,
             catalog?.WordDatByteLength,
             catalog?.ObjectRecordSize ?? 0,
-            catalog?.EventObjectBytes ?? 0);
+            catalog?.EventObjectBytes ?? 0,
+            catalog?.ContentProfile);
         var format = requestedFormat == SaveFormat.Auto ? detection.Format : requestedFormat;
-        ValidateFormat(bytes.Length, format);
+        ValidateFormat(bytes.Length, format, catalog?.ContentProfile);
         if (EditorEdition.IsGeshi) {
             GeshiSaveContract.ValidateSave(bytes, catalog!.ContentProfile);
             MaintenanceContentProfile.ValidateLocation(fullPath, catalog);
@@ -169,7 +170,7 @@ public sealed class PalSaveDocument
             format = Detection.Format;
         }
 
-        ValidateFormat(_bytes.Length, format);
+        ValidateFormat(_bytes.Length, format, Catalog?.ContentProfile);
         Format = format;
     }
 
@@ -186,8 +187,9 @@ public sealed class PalSaveDocument
             _bytes.Length,
             catalog.WordDatByteLength,
             catalog.ObjectRecordSize,
-            catalog.EventObjectBytes);
-        Catalog = catalog;
+            catalog.EventObjectBytes,
+            catalog.ContentProfile);
+        Catalog = catalog.ForSave(_bytes);
         Detection = detection;
         _usesNativeMagicSlots = UsesNativeMagicSlots(catalog.ResourceContext.GameDirectory, catalog);
         if (_usesNativeMagicSlots)
@@ -196,7 +198,7 @@ public sealed class PalSaveDocument
             HasExtendedMagicSidecar = false;
             ExtendedMagicSidecarWarning = null;
         }
-        if (detection.Format is SaveFormat.Dream220Dos or SaveFormat.Dream220Win95)
+        if (EditorEdition.IsGeshi || detection.Format is SaveFormat.Dream220Dos or SaveFormat.Dream220Win95)
         {
             Format = detection.Format;
         }
@@ -947,12 +949,12 @@ public sealed class PalSaveDocument
         return new(destination, createBackup ? rollbackPath : null, _bytes.Length);
     }
 
-    private static void ValidateFormat(int length, SaveFormat format)
+    private static void ValidateFormat(int length, SaveFormat format, MaintenanceContentProfile? profile = null)
     {
         if (EditorEdition.IsGeshi)
         {
-            if (format != SaveFormat.GeshiEasyDos || length < GeshiSaveContract.EventOffset)
-                throw new InvalidDataException("隔世专用版仅打开 700 对象 DOS 存档，不提供格式转换。");
+            if (profile is null || format != profile.Format || length < profile.MinimumSaveLength)
+                throw new InvalidDataException("维护版仅使用当前已验证内容的 700 对象存档布局，不提供格式转换。");
             return;
         }
         var minimum = format is SaveFormat.PalDos or SaveFormat.Dream220Dos

@@ -150,7 +150,7 @@ public static class GeshiSaveContract
     {
         profile ??= MaintenanceContentProfile.Geshi;
         if (bytes.Length < profile.MinimumSaveLength)
-            throw new InvalidDataException($"{profile.Name} DOS 存档至少需要 {profile.MinimumSaveLength:N0} 字节（700 对象、{profile.EventCount} 事件）；当前 {bytes.Length:N0} 字节。");
+            throw new InvalidDataException($"{profile.Name} 存档至少需要 {profile.MinimumSaveLength:N0} 字节（700×{profile.ObjectRecordSize} 字节对象、{profile.EventCount} 事件）；当前 {bytes.Length:N0} 字节。");
         int partyCount = ReadWord(bytes, 6) + 1;
         int scene = ReadWord(bytes, 8);
         int followers = ReadWord(bytes, 32);

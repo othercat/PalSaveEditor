@@ -16,8 +16,8 @@
     <BaseOutputPath>bin\Geshi\</BaseOutputPath>
     <BaseIntermediateOutputPath>obj\Geshi\</BaseIntermediateOutputPath>
     <DefaultItemExcludes>$(DefaultItemExcludes);bin/**;obj/**</DefaultItemExcludes>
-    <Version>0.1.12</Version>
-    <Product>SDLPal 存档编辑器（隔世／梦幻／梦时空）</Product>
+    <Version>0.1.15</Version>
+    <Product>SDLPal 维护版存档编辑器</Product>
   </PropertyGroup>
   <PropertyGroup Condition="'$(PalArtifactRoot)' != ''">
     <BaseOutputPath>$(PalArtifactRoot)/$(MSBuildProjectName)/bin/</BaseOutputPath>

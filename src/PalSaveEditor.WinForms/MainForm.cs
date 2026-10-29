@@ -80,7 +80,7 @@ internal sealed class MainForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         Font = new("Microsoft YaHei UI", 9F);
 
-        foreach (var format in EditorEdition.IsGeshi ? new[] { SaveFormat.GeshiEasyDos } : new[]
+        foreach (var format in EditorEdition.IsGeshi ? new[] { SaveFormat.GeshiEasyDos, SaveFormat.MaintenanceWin95 } : new[]
                  {
                      SaveFormat.Auto,
                      SaveFormat.PalWin95,

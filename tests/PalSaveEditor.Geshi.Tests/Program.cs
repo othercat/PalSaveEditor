@@ -4,8 +4,39 @@ using System.Globalization;
 using PalSaveEditor.Core;
 
 Console.OutputEncoding = Encoding.UTF8;
+if (args.Length > 0 && args[0] == "--challenge-wuhou")
+{
+    try { return ChallengeWuhouTests.Run(args.Skip(1).ToArray()); }
+    catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+}
+if (args.Length > 0 && args[0] == "--classic-profiles")
+{
+    try { return ClassicProfileTests.Run(args.Skip(1).ToArray()); }
+    catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+}
+if (args.Length > 0 && args[0] == "--geshi-variants")
+{
+    try { return MaintenanceProfileTests.Run(args.Skip(1).ToArray(), geshiVariants: true); }
+    catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+}
+if (args.Length > 0 && args[0] == "--expanded-profiles")
+{
+    try { return MaintenanceProfileTests.Run(args.Skip(1).ToArray(), true); }
+    catch (Exception error) {
+        for (Exception? current = error; current is not null; current = current.InnerException)
+            Console.Error.WriteLine(current.GetType().FullName + ": " + current.Message);
+        return 1;
+    }
+}
 if (args.Length > 0 && args[0] == "--maintenance-profiles")
-    return MaintenanceProfileTests.Run(args.Skip(1).ToArray());
+{
+    try { return MaintenanceProfileTests.Run(args.Skip(1).ToArray()); }
+    catch (Exception error) {
+        for (Exception? current = error; current is not null; current = current.InnerException)
+            Console.Error.WriteLine(current.GetType().FullName + ": " + current.Message);
+        return 1;
+    }
+}
 if (args.Length > 0 && args[0] == "--resource-matrix")
     return ResourceIdentityTests.Run(args.Skip(1).ToArray());
 if (args.Length < 2)
