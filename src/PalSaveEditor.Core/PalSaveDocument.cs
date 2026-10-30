@@ -176,7 +176,7 @@ public sealed class PalSaveDocument
 
     public void SetCatalog(PalResourceCatalog catalog)
     {
-        if (EditorEdition.IsGeshi && Catalog?.ContentProfile?.Id != catalog?.ContentProfile?.Id)
+        if (EditorEdition.IsGeshi && (Catalog?.ContentProfile?.Id != catalog?.ContentProfile?.Id || Catalog?.GameplayBinding != catalog?.GameplayBinding))
             throw new InvalidDataException("不能为已打开存档更换内容身份。请重新打开对应存档。");
         if (catalog is null)
         {
@@ -767,11 +767,11 @@ public sealed class PalSaveDocument
 
     public SaveWriteResult Save(string? targetPath = null, bool createBackup = true)
     {
+        using var maintenanceLease = EditorEdition.IsGeshi ? MaintenanceGameplayRules.AcquireForSave(Catalog, targetPath ?? Path) : null;
         if (EditorEdition.IsGeshi)
         {
             if (Catalog is null) throw new InvalidOperationException("未验证隔世资源，不能保存。");
-            if (MaintenanceContentProfile.Resolve(Catalog.SourceDirectory).Id != Catalog.ContentProfile!.Id)
-                throw new InvalidDataException("资源已切换，未保存当前存档。请重新打开对应存档。");
+            MaintenanceGameplayRules.ValidateCurrent(Catalog);
             MaintenanceContentProfile.ValidateLocation(targetPath ?? Path, Catalog);
             GeshiSaveContract.ValidateSave(_bytes, Catalog!.ContentProfile);
             if (CustomRoleLibrary.CustomRoles.Count != 0 || CustomRoleLibrary.NativeRoleNames.Count != 0)
@@ -832,6 +832,7 @@ public sealed class PalSaveDocument
                 stream.Flush(flushToDisk: true);
             }
 
+            maintenanceLease?.CheckMissing();
             if (destinationExisted)
             {
                 File.Replace(temporaryPath, destination, rollbackPath!, ignoreMetadataErrors: true);
@@ -842,6 +843,7 @@ public sealed class PalSaveDocument
             }
 
             byte[] persisted = File.ReadAllBytes(destination);
+            maintenanceLease?.CheckMissing();
             if (!persisted.AsSpan().SequenceEqual(_bytes))
             {
                 throw new IOException("保存后的文件与待写入数据不一致。 ");

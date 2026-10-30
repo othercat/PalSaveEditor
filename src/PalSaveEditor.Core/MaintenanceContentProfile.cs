@@ -112,6 +112,11 @@ public sealed record MaintenanceContentProfile(string Id, string Name, int Objec
             hashes.Add(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant());
         }
         if (Dream22.Hashes.SequenceEqual(hashes)) return Dream22.Profile;
+        // Refs engine #146/#174-176: new script/event bytes keep the same RPG
+        // layout. Retain the original tuple for existing standalone resources.
+        var dreamspace = Dreams.Single(d => d.Profile.Id == "dreamspace39x-hard");
+        if (hashes[0] == "5910cd0d3f0b97bc5126729da78d05787c9bc6433af7a76c775d5c7acc9e9f46" &&
+            hashes.Skip(1).SequenceEqual(dreamspace.Hashes.Skip(1))) return dreamspace.Profile;
         return Dreams.FirstOrDefault(d => d.Hashes.SequenceEqual(hashes)).Profile;
     }
     public static MaintenanceContentProfile Resolve(string directory)
@@ -123,9 +128,9 @@ public sealed record MaintenanceContentProfile(string Id, string Name, int Objec
     }
     internal static void ValidateLocation(string path, PalResourceCatalog catalog)
     {
-        var root = GeshiSaveContract.FindGameRoot(path);
-        if (root is null) return; // An explicitly selected external copy has no embedded identity.
-        var location = GeshiSaveContract.Locate(root);
+        var location = GeshiSaveContract.NearbyLocation(path);
+        if (location is null) return; // An external copy without nearby resources has no embedded identity.
+        string root = location.GameDirectory;
         string marker = Path.Combine(location.SaveDirectory, ".content-package");
         if (location.ContentScopedSave && !File.Exists(marker))
             throw new InvalidDataException("内容存档目录缺少身份标识，请用配置工具重新准备内容。");
@@ -137,7 +142,6 @@ public sealed record MaintenanceContentProfile(string Id, string Name, int Objec
         if ((full.StartsWith(profiles, StringComparison.OrdinalIgnoreCase) || full.StartsWith(legacy, StringComparison.OrdinalIgnoreCase)) &&
             !full.StartsWith(location.SaveDirectory.TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("该存档属于其他内容目录。请在配置工具切换到对应内容后再打开，未修改存档。");
-        if (Resolve(location.ResourceDirectory).Id != catalog.ContentProfile?.Id)
-            throw new InvalidDataException("当前游戏内容已切换，请重新打开对应存档。");
+        MaintenanceGameplayRules.ValidateCurrent(catalog, location);
     }
 }

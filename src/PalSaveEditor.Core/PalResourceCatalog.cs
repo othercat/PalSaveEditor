@@ -24,7 +24,7 @@ public sealed class PalResourceCatalog
         return new PalResourceCatalog(ResourceContext, _words, WordDatByteLength, _objectFlags,
             ObjectRecordSize, ObjectRecordCount, RuntimeObjectRecordCount, EventObjectBytes)
         {
-            ContentProfile = ContentProfile, _globalSkillNames = _globalSkillNames,
+            ContentProfile = ContentProfile, GameplayBinding = GameplayBinding, _globalSkillNames = _globalSkillNames,
             _challengeWuhouOwned = supported && bytes.Length >= PalSaveLayout.PoisonOffset + 32 &&
                 bytes.AsSpan(PalSaveLayout.PoisonOffset + 24, 8).SequenceEqual(marker)
         };
@@ -54,6 +54,7 @@ public sealed class PalResourceCatalog
     }
 
     public MaintenanceContentProfile? ContentProfile { get; private set; }
+    public MaintenanceGameplayBinding? GameplayBinding { get; private set; }
     public string SourceDirectory { get; }
     public PalGameResourceContext ResourceContext { get; }
     public string? ActiveProfileId => ResourceContext.ProfileId;
@@ -96,10 +97,12 @@ public sealed class PalResourceCatalog
             throw new ArgumentException("游戏资料目录不能为空。", nameof(gameDirectory));
         }
         PalGameResourceContext resourceContext;
+        var maintenanceLocation = EditorEdition.IsGeshi ? GeshiSaveContract.Locate(gameDirectory) : null;
+        using var maintenanceLease = maintenanceLocation is null ? null : MaintenanceGameplayRules.Acquire(maintenanceLocation);
         MaintenanceContentProfile? maintenanceProfile = null;
         if (EditorEdition.IsGeshi)
         {
-            var location = GeshiSaveContract.Locate(gameDirectory);
+            var location = maintenanceLocation!;
             maintenanceProfile = MaintenanceContentProfile.Resolve(location.ResourceDirectory);
             resourceContext = new(location.GameDirectory, location.ResourceDirectory,
                 null, null, null, null, null, null, null);
@@ -196,6 +199,8 @@ public sealed class PalResourceCatalog
         {
             var profile = maintenanceProfile!;
             result.ContentProfile = profile;
+            result.GameplayBinding = MaintenanceGameplayRules.Read(
+                new(resourceContext.GameDirectory, fullDirectory, ""), profile);
             byte[] magicData = ReadMkfChunk(Path.Combine(fullDirectory, "DATA.MKF"), 4);
             byte[] objects = ReadMkfChunk(sssPath, 2);
             if (objectRecordCount != profile.ObjectCount ||
@@ -220,6 +225,7 @@ public sealed class PalResourceCatalog
             }
             result._globalSkillNames = names;
         }
+        maintenanceLease?.CheckMissing();
         return result;
     }
 

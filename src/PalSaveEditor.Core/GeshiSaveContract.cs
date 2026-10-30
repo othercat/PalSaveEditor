@@ -101,6 +101,20 @@ public static class GeshiSaveContract
         return Locate(AppDomain.CurrentDomain.BaseDirectory);
     }
 
+    // Target validation must also recognize standalone resource copies. Unlike
+    // LocateForSave, this never falls back to the editor executable's own game.
+    internal static GeshiGameLocation? NearbyLocation(string savePath)
+    {
+        string directory = Path.GetDirectoryName(Path.GetFullPath(savePath))!;
+        string? root = FindGameRoot(directory);
+        if (root is not null) return Locate(root);
+        for (DirectoryInfo? current = new(directory); current is not null; current = current.Parent)
+            if (File.Exists(Path.Combine(current.FullName, "WORD.DAT")) ||
+                File.Exists(Path.Combine(current.FullName, "PAL", "WORD.DAT")))
+                return Locate(current.FullName);
+        return null;
+    }
+
     public static void ValidateResources(string resourceDirectory)
         => GetResourceCodePage(resourceDirectory);
 
