@@ -5,7 +5,7 @@ using System.Text;
 
 namespace PalSaveEditor.Core;
 
-public sealed record GeshiGameLocation(string GameDirectory, string ResourceDirectory, string SaveDirectory);
+public sealed record GeshiGameLocation(string GameDirectory, string ResourceDirectory, string SaveDirectory, bool ContentScopedSave = false);
 
 /// <summary>
 /// Contract for the authorized Geshi Easy resources, not a heuristic for arbitrary mods.
@@ -66,6 +66,7 @@ public static class GeshiSaveContract
 
         string gamePath = "PAL";
         string savePath = ".";
+        string? saveDirectory = null;
         string config = Path.Combine(root, "sdlpal.cfg");
         if (File.Exists(config))
         {
@@ -80,9 +81,11 @@ public static class GeshiSaveContract
                 if (value.Length == 0) continue;
                 if (key.Equals("GamePath", StringComparison.OrdinalIgnoreCase)) gamePath = value;
                 if (key.Equals("SavePath", StringComparison.OrdinalIgnoreCase)) savePath = value;
+                if (key.Equals("SaveDirectory", StringComparison.OrdinalIgnoreCase)) saveDirectory = value;
             }
         }
-        return new(root, ResolvePath(root, gamePath), Path.Combine(ResolvePath(root, savePath), "save"));
+        return new(root, ResolvePath(root, gamePath), saveDirectory is null
+            ? Path.Combine(ResolvePath(root, savePath), "save") : ResolvePath(root, saveDirectory), saveDirectory is not null);
     }
 
     public static GeshiGameLocation LocateForSave(string savePath)
@@ -103,6 +106,7 @@ public static class GeshiSaveContract
 
     public static int GetResourceCodePage(string resourceDirectory)
     {
+        if (MaintenanceContentProfile.FindDream(resourceDirectory) is not null) return 936;
         bool original = true, simplified = true;
         foreach (var resource in Resources)
         {
@@ -142,10 +146,11 @@ public static class GeshiSaveContract
         return result.ToString();
     }
 
-    public static void ValidateSave(byte[] bytes)
+    public static void ValidateSave(byte[] bytes, MaintenanceContentProfile? profile = null)
     {
-        if (bytes.Length < MinimumSaveLength)
-            throw new InvalidDataException($"隔世 DOS 存档至少需要 {MinimumSaveLength:N0} 字节（700 对象、5632 事件）；当前 {bytes.Length:N0} 字节。原版 98/DOS 和梦幻存档不能使用此工具。");
+        profile ??= MaintenanceContentProfile.Geshi;
+        if (bytes.Length < profile.MinimumSaveLength)
+            throw new InvalidDataException($"{profile.Name} DOS 存档至少需要 {profile.MinimumSaveLength:N0} 字节（700 对象、{profile.EventCount} 事件）；当前 {bytes.Length:N0} 字节。");
         int partyCount = ReadWord(bytes, 6) + 1;
         int scene = ReadWord(bytes, 8);
         int followers = ReadWord(bytes, 32);

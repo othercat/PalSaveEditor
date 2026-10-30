@@ -19,7 +19,7 @@ public static class SaveFormatExtensions
         SaveFormat.PalWin95 => "仙剑 98（Win95 布局）",
         SaveFormat.Dream220Dos => "梦幻 2.20（DOS 兼容布局）",
         SaveFormat.Dream220Win95 => "梦幻2.2显血版（PALDLL / Win95 布局）",
-        SaveFormat.GeshiEasyDos => "隔世追凶·简单（700 对象 DOS 布局）",
+        SaveFormat.GeshiEasyDos => "SDLPal 维护版（700 对象 DOS 布局）",
         _ => format.ToString(),
     };
 }

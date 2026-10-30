@@ -4,6 +4,8 @@ using System.Globalization;
 using PalSaveEditor.Core;
 
 Console.OutputEncoding = Encoding.UTF8;
+if (args.Length > 0 && args[0] == "--maintenance-profiles")
+    return MaintenanceProfileTests.Run(args.Skip(1).ToArray());
 if (args.Length > 0 && args[0] == "--resource-matrix")
     return ResourceIdentityTests.Run(args.Skip(1).ToArray());
 if (args.Length < 2)

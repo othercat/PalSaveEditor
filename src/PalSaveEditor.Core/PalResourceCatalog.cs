@@ -31,6 +31,7 @@ public sealed class PalResourceCatalog
         EventObjectBytes = eventObjectBytes;
     }
 
+    public MaintenanceContentProfile? ContentProfile { get; private set; }
     public string SourceDirectory { get; }
     public PalGameResourceContext ResourceContext { get; }
     public string? ActiveProfileId => ResourceContext.ProfileId;
@@ -170,14 +171,16 @@ public sealed class PalResourceCatalog
             eventObjectBytes);
         if (EditorEdition.IsGeshi)
         {
+            var profile = MaintenanceContentProfile.Resolve(fullDirectory);
+            result.ContentProfile = profile;
             byte[] magicData = ReadMkfChunk(Path.Combine(fullDirectory, "DATA.MKF"), 4);
             byte[] objects = ReadMkfChunk(sssPath, 2);
-            if (objectRecordCount != GeshiSaveContract.ResourceObjectCount ||
-                eventObjectBytes != GeshiSaveContract.EventCount * 32 ||
-                magicData.Length != GeshiSaveContract.MagicDataCount * 32)
+            if (objectRecordCount != profile.ObjectCount ||
+                eventObjectBytes != profile.EventCount * 32 ||
+                magicData.Length != profile.MagicCount * 32)
                 throw new InvalidDataException("隔世资源表结构与专用合同不一致。");
-            foreach (int id in Enumerable.Range(1, objectRecordCount).Where(GeshiSaveContract.IsMagic))
-                if (BinaryPrimitives.ReadUInt16LittleEndian(objects.AsSpan(id * 12, 2)) >= GeshiSaveContract.MagicDataCount)
+            foreach (int id in Enumerable.Range(1, objectRecordCount).Where(profile.IsMagic))
+                if (BinaryPrimitives.ReadUInt16LittleEndian(objects.AsSpan(id * 12, 2)) >= profile.MagicCount)
                     throw new InvalidDataException($"隔世法术 #{id} 超出 DATA.MKF 法术表。");
         }
         if (resourceContext.GlobalSkillLibraryPath is not null)
@@ -216,8 +219,8 @@ public sealed class PalResourceCatalog
     public ushort GetObjectFlags(int objectId) =>
         _objectFlags is not null && (uint)objectId < (uint)_objectFlags.Length ? _objectFlags[objectId] : (ushort)0;
 
-    public bool IsItem(int id) => !EditorEdition.IsGeshi || GeshiSaveContract.IsItem(id);
-    public bool IsMagic(int id) => !EditorEdition.IsGeshi || GeshiSaveContract.IsMagic(id);
+    public bool IsItem(int id) => !EditorEdition.IsGeshi || ContentProfile!.IsItem(id);
+    public bool IsMagic(int id) => !EditorEdition.IsGeshi || ContentProfile!.IsMagic(id);
     public bool IsEquipment(int id) => IsItem(id) && (!EditorEdition.IsGeshi || (GetObjectFlags(id) & 2) != 0);
 
     public IReadOnlyList<(ushort Id, string Name)> SearchObjects(string? query, int maximum = 200, Func<int, bool>? filter = null)

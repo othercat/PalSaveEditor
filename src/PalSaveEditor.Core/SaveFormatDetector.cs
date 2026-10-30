@@ -21,12 +21,11 @@ public static class SaveFormatDetector
     {
         if (EditorEdition.IsGeshi)
         {
-            if (wordDatLength != 5880 || objectRecordSize != 12 ||
-                eventObjectBytes != GeshiSaveContract.EventCount * 32 ||
-                fileLength < GeshiSaveContract.MinimumSaveLength)
+            if (!((wordDatLength == 5880 && eventObjectBytes == 5632 * 32) || (wordDatLength == 5890 && eventObjectBytes == 5369 * 32)) ||
+                objectRecordSize != 12 || fileLength < GeshiSaveContract.EventOffset + eventObjectBytes)
                 throw new InvalidDataException("存档或配套资源不符合隔世追凶·简单的 700 对象 DOS 合同。");
             return new(SaveFormat.GeshiEasyDos,
-                "已验证隔世四资源 SHA256；700×12 字节对象、5632×32 字节事件，附加尾部原样保留。",
+                "按已验证内容资源解析 700×12 字节对象及其事件表；附加尾部原样保留。",
                 false, [SaveFormat.GeshiEasyDos]);
         }
         if (fileLength < PalSaveLayout.DosEventObjectOffset)

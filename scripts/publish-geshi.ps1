@@ -1,11 +1,12 @@
-param()
+param([Parameter(Mandatory=$true)][string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$output = Join-Path $repo ('artifacts/publish-geshi-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+$output = [IO.Path]::GetFullPath($OutputDirectory)
+$build = Join-Path (Split-Path -Parent $output) ('build-' + [IO.Path]::GetFileName($output))
 if (Test-Path -LiteralPath $output) { throw 'Publish output already exists.' }
 Push-Location $repo
 try {
-    & dotnet publish src/PalSaveEditor.WinForms/PalSaveEditor.WinForms.csproj -c Release -p:GeshiEdition=true -p:DebugType=None -p:DebugSymbols=false -o $output --nologo -v:minimal
+    & dotnet publish src/PalSaveEditor.WinForms/PalSaveEditor.WinForms.csproj -c Release -p:GeshiEdition=true "-p:PalArtifactRoot=$build" -p:DebugType=None -p:DebugSymbols=false -o $output --nologo -v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Dedicated publish failed.' }
     $exe = Join-Path $output '隔世追凶存档编辑器.exe'
     if (-not (Test-Path -LiteralPath $exe)) { throw 'Dedicated executable is missing.' }
@@ -14,7 +15,7 @@ try {
 
     # Use this publish's restored package graph, not a separately maintained list.
     # Verify each copied NuGet DLL against its exact package asset before attaching notices.
-    $assetsPath = Join-Path $repo 'src/PalSaveEditor.WinForms/obj/Geshi/project.assets.json'
+    $assetsPath = Join-Path $build 'PalSaveEditor.WinForms/obj/project.assets.json'
     $assets = Get-Content -LiteralPath $assetsPath -Raw | ConvertFrom-Json -AsHashtable
     $targetName = if ($assets.targets.ContainsKey('net472/win-x86')) { 'net472/win-x86' } else { 'net472' }
     if (-not $assets.targets.ContainsKey($targetName)) { throw 'The restored publish target is missing.' }
