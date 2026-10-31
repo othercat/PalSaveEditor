@@ -4,6 +4,11 @@ using System.Globalization;
 using PalSaveEditor.Core;
 
 Console.OutputEncoding = Encoding.UTF8;
+if (args.Length > 0 && args[0] == "--r97-imports")
+{
+    try { return R97ImportedTests.Run(args.Skip(1).ToArray()); }
+    catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+}
 if (args.Length > 0 && args[0] == "--gameplay-rules")
 {
     try { return GameplayRuleTests.Run(args.Skip(1).ToArray()); }

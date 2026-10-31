@@ -10,6 +10,9 @@ public sealed class PalResourceCatalog
     private readonly ushort[]? _objectFlags;
     private IReadOnlyDictionary<int, string> _globalSkillNames = new Dictionary<int, string>();
     private bool _challengeWuhouOwned;
+    private bool _challengeClassicOwned, _universalTroubleOwned;
+    private static readonly string[] ChallengeClassicNames =
+        ["梦蛇", "气疗术", "观音咒", "凝神归元", "元灵归心术", "赎魂", "回梦", "夺魂", "鬼降", "净衣咒", "冰心诀", "灵血咒", "金刚咒", "风咒", "风神", "雷咒", "天雷破", "雷神", "冰咒", "雪妖", "炎咒", "炎杀咒", "土咒", "山神", "气剑指", "三尸咒", "御蜂术", "火神", "乾坤一掷"];
     private static readonly string[] ChallengeWuhouNames =
         ["梦蛇", "夺魂", "元灵归心术", "风神", "雷神", "雪妖", "火神", "山神", "赎魂", "灵血咒"];
 
@@ -26,11 +29,17 @@ public sealed class PalResourceCatalog
         {
             ContentProfile = ContentProfile, GameplayBinding = GameplayBinding, _globalSkillNames = _globalSkillNames,
             _challengeWuhouOwned = supported && bytes.Length >= PalSaveLayout.PoisonOffset + 32 &&
-                bytes.AsSpan(PalSaveLayout.PoisonOffset + 24, 8).SequenceEqual(marker)
+                bytes.AsSpan(PalSaveLayout.PoisonOffset + 24, 8).SequenceEqual(marker),
+            _challengeClassicOwned = ContentProfile is not null && bytes.Length >= PalSaveLayout.PoisonOffset + 120 &&
+                bytes.AsSpan(PalSaveLayout.PoisonOffset + 112, 8).SequenceEqual(new byte[]{(byte)'P',(byte)'C',(byte)'L',(byte)'1',1,0,0,0}),
+            _universalTroubleOwned = ContentProfile is not null && bytes.Length >= PalSaveLayout.PoisonOffset + 128 &&
+                bytes.AsSpan(PalSaveLayout.PoisonOffset + 120, 8).SequenceEqual(new byte[]{(byte)'P',(byte)'U',(byte)'M',(byte)'1',1,0,0,0})
         };
     }
 
     private bool IsChallengeWuhouMagic(int id) => _challengeWuhouOwned && id is >= 690 and < 700;
+    private bool IsChallengeClassicMagic(int id) => _challengeClassicOwned && id is >= 600 and < 629;
+    private bool IsUniversalTrouble(int id) => _universalTroubleOwned && id == 640;
 
     private PalResourceCatalog(
         PalGameResourceContext resourceContext,
@@ -231,6 +240,8 @@ public sealed class PalResourceCatalog
 
     public string GetWord(int id, string fallbackPrefix = "对象")
     {
+        if (IsChallengeClassicMagic(id)) return ChallengeClassicNames[id - 600];
+        if (IsUniversalTrouble(id)) return "万能麻烦";
         if (IsChallengeWuhouMagic(id)) return ChallengeWuhouNames[id - 690];
         if (_globalSkillNames.TryGetValue(id, out string? name)) return name;
         if ((uint)id < (uint)_words.Length && !string.IsNullOrWhiteSpace(_words[id]))
@@ -246,22 +257,24 @@ public sealed class PalResourceCatalog
 
     public string GetObjectName(int objectId) => GetWord(objectId);
 
-    public ushort GetObjectFlags(int objectId) =>
+    public ushort GetObjectFlags(int objectId) => IsUniversalTrouble(objectId) ? (ushort)17 :
         _objectFlags is not null && (uint)objectId < (uint)_objectFlags.Length ? _objectFlags[objectId] : (ushort)0;
 
-    public bool IsItem(int id) => !EditorEdition.IsGeshi || ContentProfile!.IsItem(id);
-    public bool IsMagic(int id) => !EditorEdition.IsGeshi || IsChallengeWuhouMagic(id) || ContentProfile!.IsMagic(id);
+    public bool IsItem(int id) => !EditorEdition.IsGeshi || IsUniversalTrouble(id) || ContentProfile!.IsItem(id);
+    public bool IsMagic(int id) => !EditorEdition.IsGeshi || IsChallengeClassicMagic(id) || IsChallengeWuhouMagic(id) || ContentProfile!.IsMagic(id);
     public bool IsEquipment(int id) => IsItem(id) && (!EditorEdition.IsGeshi || (GetObjectFlags(id) & 2) != 0);
 
     public IReadOnlyList<(ushort Id, string Name)> SearchObjects(string? query, int maximum = 200, Func<int, bool>? filter = null)
     {
         var normalized = query?.Trim() ?? string.Empty;
         var result = new List<(ushort, string)>();
-        var limit = Math.Min(Math.Max(_words.Length, _challengeWuhouOwned ? 700 : 0), ushort.MaxValue + 1);
+        var privateLimit = _challengeWuhouOwned ? 700 : _universalTroubleOwned ? 641 : _challengeClassicOwned ? 629 : 0;
+        var limit = Math.Min(Math.Max(_words.Length, privateLimit), ushort.MaxValue + 1);
         for (var id = 1; id < limit && result.Count < maximum; id++)
         {
             if (filter is not null && !filter(id)) continue;
-            var name = IsChallengeWuhouMagic(id) ? ChallengeWuhouNames[id - 690] : id < _words.Length ? _words[id] : "";
+            var name = IsChallengeClassicMagic(id) ? ChallengeClassicNames[id - 600] : IsUniversalTrouble(id) ? "万能麻烦" :
+                IsChallengeWuhouMagic(id) ? ChallengeWuhouNames[id - 690] : id < _words.Length ? _words[id] : "";
             if (string.IsNullOrWhiteSpace(name))
             {
                 continue;
