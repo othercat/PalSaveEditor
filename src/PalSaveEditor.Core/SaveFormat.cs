@@ -8,6 +8,7 @@ public enum SaveFormat
     Dream220Dos,
     Dream220Win95,
     GeshiEasyDos,
+    MaintenanceWin95,
 }
 
 public static class SaveFormatExtensions
@@ -20,6 +21,7 @@ public static class SaveFormatExtensions
         SaveFormat.Dream220Dos => "梦幻 2.20（DOS 兼容布局）",
         SaveFormat.Dream220Win95 => "梦幻2.2显血版（PALDLL / Win95 布局）",
         SaveFormat.GeshiEasyDos => "SDLPal 维护版（700 对象 DOS 布局）",
+        SaveFormat.MaintenanceWin95 => "SDLPal 维护版（700 对象 Win95 布局）",
         _ => format.ToString(),
     };
 }

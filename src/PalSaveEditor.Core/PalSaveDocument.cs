@@ -26,7 +26,7 @@ public sealed class PalSaveDocument
         _bytes = bytes;
         Format = format;
         Detection = detection;
-        Catalog = catalog;
+        Catalog = catalog?.ForSave(bytes);
         string gameDirectory = catalog?.ResourceContext.GameDirectory
             ?? System.IO.Path.GetDirectoryName(Path)
             ?? Environment.CurrentDirectory;
@@ -152,9 +152,10 @@ public sealed class PalSaveDocument
             bytes.Length,
             catalog?.WordDatByteLength,
             catalog?.ObjectRecordSize ?? 0,
-            catalog?.EventObjectBytes ?? 0);
+            catalog?.EventObjectBytes ?? 0,
+            catalog?.ContentProfile);
         var format = requestedFormat == SaveFormat.Auto ? detection.Format : requestedFormat;
-        ValidateFormat(bytes.Length, format);
+        ValidateFormat(bytes.Length, format, catalog?.ContentProfile);
         if (EditorEdition.IsGeshi) {
             GeshiSaveContract.ValidateSave(bytes, catalog!.ContentProfile);
             MaintenanceContentProfile.ValidateLocation(fullPath, catalog);
@@ -169,13 +170,13 @@ public sealed class PalSaveDocument
             format = Detection.Format;
         }
 
-        ValidateFormat(_bytes.Length, format);
+        ValidateFormat(_bytes.Length, format, Catalog?.ContentProfile);
         Format = format;
     }
 
     public void SetCatalog(PalResourceCatalog catalog)
     {
-        if (EditorEdition.IsGeshi && Catalog?.ContentProfile?.Id != catalog?.ContentProfile?.Id)
+        if (EditorEdition.IsGeshi && (Catalog?.ContentProfile?.Id != catalog?.ContentProfile?.Id || Catalog?.GameplayBinding != catalog?.GameplayBinding))
             throw new InvalidDataException("不能为已打开存档更换内容身份。请重新打开对应存档。");
         if (catalog is null)
         {
@@ -186,8 +187,9 @@ public sealed class PalSaveDocument
             _bytes.Length,
             catalog.WordDatByteLength,
             catalog.ObjectRecordSize,
-            catalog.EventObjectBytes);
-        Catalog = catalog;
+            catalog.EventObjectBytes,
+            catalog.ContentProfile);
+        Catalog = catalog.ForSave(_bytes);
         Detection = detection;
         _usesNativeMagicSlots = UsesNativeMagicSlots(catalog.ResourceContext.GameDirectory, catalog);
         if (_usesNativeMagicSlots)
@@ -196,7 +198,7 @@ public sealed class PalSaveDocument
             HasExtendedMagicSidecar = false;
             ExtendedMagicSidecarWarning = null;
         }
-        if (detection.Format is SaveFormat.Dream220Dos or SaveFormat.Dream220Win95)
+        if (EditorEdition.IsGeshi || detection.Format is SaveFormat.Dream220Dos or SaveFormat.Dream220Win95)
         {
             Format = detection.Format;
         }
@@ -765,11 +767,11 @@ public sealed class PalSaveDocument
 
     public SaveWriteResult Save(string? targetPath = null, bool createBackup = true)
     {
+        using var maintenanceLease = EditorEdition.IsGeshi ? MaintenanceGameplayRules.AcquireForSave(Catalog, targetPath ?? Path) : null;
         if (EditorEdition.IsGeshi)
         {
             if (Catalog is null) throw new InvalidOperationException("未验证隔世资源，不能保存。");
-            if (MaintenanceContentProfile.Resolve(Catalog.SourceDirectory).Id != Catalog.ContentProfile!.Id)
-                throw new InvalidDataException("资源已切换，未保存当前存档。请重新打开对应存档。");
+            MaintenanceGameplayRules.ValidateCurrent(Catalog);
             MaintenanceContentProfile.ValidateLocation(targetPath ?? Path, Catalog);
             GeshiSaveContract.ValidateSave(_bytes, Catalog!.ContentProfile);
             if (CustomRoleLibrary.CustomRoles.Count != 0 || CustomRoleLibrary.NativeRoleNames.Count != 0)
@@ -830,6 +832,7 @@ public sealed class PalSaveDocument
                 stream.Flush(flushToDisk: true);
             }
 
+            maintenanceLease?.CheckMissing();
             if (destinationExisted)
             {
                 File.Replace(temporaryPath, destination, rollbackPath!, ignoreMetadataErrors: true);
@@ -840,6 +843,7 @@ public sealed class PalSaveDocument
             }
 
             byte[] persisted = File.ReadAllBytes(destination);
+            maintenanceLease?.CheckMissing();
             if (!persisted.AsSpan().SequenceEqual(_bytes))
             {
                 throw new IOException("保存后的文件与待写入数据不一致。 ");
@@ -947,12 +951,12 @@ public sealed class PalSaveDocument
         return new(destination, createBackup ? rollbackPath : null, _bytes.Length);
     }
 
-    private static void ValidateFormat(int length, SaveFormat format)
+    private static void ValidateFormat(int length, SaveFormat format, MaintenanceContentProfile? profile = null)
     {
         if (EditorEdition.IsGeshi)
         {
-            if (format != SaveFormat.GeshiEasyDos || length < GeshiSaveContract.EventOffset)
-                throw new InvalidDataException("隔世专用版仅打开 700 对象 DOS 存档，不提供格式转换。");
+            if (profile is null || format != profile.Format || length < profile.MinimumSaveLength)
+                throw new InvalidDataException("维护版仅使用当前已验证内容的 700 对象存档布局，不提供格式转换。");
             return;
         }
         var minimum = format is SaveFormat.PalDos or SaveFormat.Dream220Dos

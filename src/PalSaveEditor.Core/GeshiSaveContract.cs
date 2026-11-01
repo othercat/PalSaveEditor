@@ -101,6 +101,20 @@ public static class GeshiSaveContract
         return Locate(AppDomain.CurrentDomain.BaseDirectory);
     }
 
+    // Target validation must also recognize standalone resource copies. Unlike
+    // LocateForSave, this never falls back to the editor executable's own game.
+    internal static GeshiGameLocation? NearbyLocation(string savePath)
+    {
+        string directory = Path.GetDirectoryName(Path.GetFullPath(savePath))!;
+        string? root = FindGameRoot(directory);
+        if (root is not null) return Locate(root);
+        for (DirectoryInfo? current = new(directory); current is not null; current = current.Parent)
+            if (File.Exists(Path.Combine(current.FullName, "WORD.DAT")) ||
+                File.Exists(Path.Combine(current.FullName, "PAL", "WORD.DAT")))
+                return Locate(current.FullName);
+        return null;
+    }
+
     public static void ValidateResources(string resourceDirectory)
         => GetResourceCodePage(resourceDirectory);
 
@@ -150,7 +164,7 @@ public static class GeshiSaveContract
     {
         profile ??= MaintenanceContentProfile.Geshi;
         if (bytes.Length < profile.MinimumSaveLength)
-            throw new InvalidDataException($"{profile.Name} DOS 存档至少需要 {profile.MinimumSaveLength:N0} 字节（700 对象、{profile.EventCount} 事件）；当前 {bytes.Length:N0} 字节。");
+            throw new InvalidDataException($"{profile.Name} 存档至少需要 {profile.MinimumSaveLength:N0} 字节（700×{profile.ObjectRecordSize} 字节对象、{profile.EventCount} 事件）；当前 {bytes.Length:N0} 字节。");
         int partyCount = ReadWord(bytes, 6) + 1;
         int scene = ReadWord(bytes, 8);
         int followers = ReadWord(bytes, 32);

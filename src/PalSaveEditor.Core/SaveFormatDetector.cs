@@ -17,16 +17,18 @@ public static class SaveFormatDetector
         int fileLength,
         int? wordDatLength = null,
         int objectRecordSize = 0,
-        int eventObjectBytes = 0)
+        int eventObjectBytes = 0,
+        MaintenanceContentProfile? maintenanceProfile = null)
     {
         if (EditorEdition.IsGeshi)
         {
-            if (!((wordDatLength == 5880 && eventObjectBytes == 5632 * 32) || (wordDatLength == 5890 && eventObjectBytes == 5369 * 32)) ||
-                objectRecordSize != 12 || fileLength < GeshiSaveContract.EventOffset + eventObjectBytes)
-                throw new InvalidDataException("存档或配套资源不符合隔世追凶·简单的 700 对象 DOS 合同。");
-            return new(SaveFormat.GeshiEasyDos,
-                "按已验证内容资源解析 700×12 字节对象及其事件表；附加尾部原样保留。",
-                false, [SaveFormat.GeshiEasyDos]);
+            if (maintenanceProfile is null || eventObjectBytes != maintenanceProfile.EventCount * 32 ||
+                wordDatLength is null or < 10 or > 7002 ||
+                objectRecordSize != maintenanceProfile.ObjectRecordSize || fileLength < maintenanceProfile.MinimumSaveLength)
+                throw new InvalidDataException("存档或配套资源不符合已验证维护内容的 700 对象合同。");
+            return new(maintenanceProfile.Format,
+                $"按已验证内容资源解析 700×{objectRecordSize} 字节对象及其事件表；附加尾部原样保留。",
+                false, [maintenanceProfile.Format]);
         }
         if (fileLength < PalSaveLayout.DosEventObjectOffset)
         {

@@ -3,10 +3,12 @@ using System.Buffers.Binary;
 
 internal static class MaintenanceProfileTests
 {
-    internal static int Run(string[] args)
+    internal static int Run(string[] args, bool expanded = false, bool geshiVariants = false)
     {
-        if (args.Length is not (4 or 5) || Directory.Exists(args[args.Length - 1])) throw new ArgumentException("Three or four read-only native fixture roots and one fresh output directory required.");
-        string[] expected = args.Length == 5 ? ["dream222-normal", "dream222-hard", "dreamspace39x-hard", "dream22-puppet100"] : ["dream222-normal", "dream222-hard", "dreamspace39x-hard"];
+        if ((geshiVariants ? args.Length != 5 : expanded ? args.Length != 10 : args.Length is not (4 or 5)) || Directory.Exists(args[args.Length - 1])) throw new ArgumentException("Read-only native fixture roots and one fresh output directory required.");
+        string[] expected = geshiVariants ? ["geshi-hard", "geshi-nightwolf", "geshi-fanmade", "geshi-fanmade-entertainment"] : expanded ? ["dream211", "dream211-pudu", "dream211-yueying", "dream211-yueying-rat", "mogai10", "tianqi20", "hunqian167-easy", "hunqian167-hard", "hunqian-branch"] : args.Length == 5 ? ["dream222-normal", "dream222-hard", "dreamspace39x-hard", "dream22-puppet100"] : ["dream222-normal", "dream222-hard", "dreamspace39x-hard"];
+        int[] objectCounts = geshiVariants ? [588,588,588,588] : [589,589,595,595,565,586,575,575,565];
+        int[] eventCounts = geshiVariants ? [5632,5632,5632,5632] : [5369,5369,5376,5376,5332,5403,5332,5332,5332];
         int checks = 0;
         void Check(bool ok, string message) { if (!ok) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
         void Reject(Action action, string message) { try { action(); } catch (InvalidDataException) { Check(true, message); return; } throw new Exception(message); }
@@ -24,9 +26,15 @@ internal static class MaintenanceProfileTests
             byte[] bytes = source.Concat(new byte[] { 23, 87, 42 }).ToArray();
             string save = Path.Combine(root, "save", expected[i], "1.rpg"); File.WriteAllBytes(save, bytes);
             var document = PalSaveDocument.Load(save); var catalog = document.Catalog!;
-            Check(catalog.ContentProfile!.Id == expected[i] && catalog.ObjectRecordCount == 589 && catalog.EventObjectBytes == 5369 * 32, "actual native save selects " + expected[i]);
-            Check(catalog.IsItem(564) && catalog.IsItem(565) && catalog.IsItem(579) && !catalog.IsItem(569) && !catalog.IsItem(296), "resource-audited items exclude enemy magic aliases");
-            Check(catalog.IsMagic(588) == (i == 2), "unused v1.8 588 cannot be added as a learned spell");
+            Check(catalog.ContentProfile!.Id == expected[i] && catalog.ObjectRecordCount == (expanded || geshiVariants ? objectCounts[i] : 589) && catalog.EventObjectBytes == (expanded || geshiVariants ? eventCounts[i] : 5369) * 32, "actual native save selects " + expected[i]);
+            if (expanded || geshiVariants) {
+                Check(catalog.IsItem(200) && !catalog.IsItem(296) && catalog.IsMagic(296), "equipment and magic union types remain distinct");
+                if (expected[i] == "tianqi20") Check(catalog.IsItem(389) && !catalog.IsMagic(389), "Tianqi manual remains an item; its obsolete invalid magic record cannot be learned");
+                if (expected[i].StartsWith("dream211-yueying")) Check(catalog.IsItem(576) && !catalog.IsItem(579) && catalog.IsItem(575) == (expected[i] == "dream211-yueying"), "Moon and Rat keep their separately audited item catalogs");
+            } else {
+                Check(catalog.IsItem(564) && catalog.IsItem(565) && catalog.IsItem(579) && !catalog.IsItem(569) && !catalog.IsItem(296), "resource-audited items exclude enemy magic aliases");
+                Check(catalog.IsMagic(588) == (i == 2), "unused v1.8 588 cannot be added as a learned spell");
+            }
             var result = document.Save();
             Check(File.ReadAllBytes(save).SequenceEqual(bytes) && File.ReadAllBytes(result.BackupPath!).SequenceEqual(bytes), "no-op and backup preserve every source/tail byte");
             document.Cash = 123456;
