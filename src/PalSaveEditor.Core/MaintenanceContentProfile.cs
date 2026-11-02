@@ -113,9 +113,11 @@ public sealed record MaintenanceContentProfile(string Id, string Name, int Objec
         }
         if (Dream22.Hashes.SequenceEqual(hashes)) return Dream22.Profile;
         // Refs engine #146/#174-176: new script/event bytes keep the same RPG
-        // layout. Retain the original tuple for existing standalone resources.
+        // layout. Refs engine #222: r101's four fire-script instructions also
+        // preserve all RPG fields. Retain every prior standalone identity.
         var dreamspace = Dreams.Single(d => d.Profile.Id == "dreamspace39x-hard");
-        if (hashes[0] == "5910cd0d3f0b97bc5126729da78d05787c9bc6433af7a76c775d5c7acc9e9f46" &&
+        if ((hashes[0] == "5910cd0d3f0b97bc5126729da78d05787c9bc6433af7a76c775d5c7acc9e9f46" ||
+             hashes[0] == "36f5e5f9fef551827ada0d397b862bc6760708308427244729332d6364bbfd2a") &&
             hashes.Skip(1).SequenceEqual(dreamspace.Hashes.Skip(1))) return dreamspace.Profile;
         return Dreams.FirstOrDefault(d => d.Hashes.SequenceEqual(hashes)).Profile;
     }
