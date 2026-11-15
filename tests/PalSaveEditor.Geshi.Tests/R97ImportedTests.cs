@@ -24,8 +24,8 @@ internal static class R97ImportedTests
             Check(catalog.GetObjectName(600)=="梦蛇" && catalog.GetObjectName(628)=="乾坤一掷",content+" original skill names");
             for(int i=600;i<629;++i)Check(catalog.IsMagic(i) && !catalog.IsItem(i) && catalog.SearchObjects(i.ToString(),filter:catalog.IsMagic).Any(v=>v.Id==i),content+" selectable imported spell "+i);
             for(int i=629;i<=634;++i)Check(!catalog.IsMagic(i) && !catalog.IsItem(i),content+" dependency stays hidden "+i);
-            Check(catalog.IsItem(640) && !catalog.IsMagic(640) && !catalog.IsEquipment(640) && catalog.GetObjectName(640)=="万能麻烦",content+" universal item type and name");
-            Check(document.GetInventory().Any(v=>v.ItemId==640 && v.DisplayName=="万能麻烦"),content+" native universal inventory is readable");
+            Check(catalog.IsItem(640) && !catalog.IsMagic(640) && !catalog.IsEquipment(640) && catalog.GetObjectName(640)=="甄麻烦",content+" universal item type and name");
+            Check(document.GetInventory().Any(v=>v.ItemId==640 && v.DisplayName=="甄麻烦"),content+" native universal inventory is readable");
             document.Save();Check(File.ReadAllBytes(path).SequenceEqual(original),content+" no-op save byte identity");
             document.Cash+=17;document.Save();byte[] edited=File.ReadAllBytes(path);int objectBytes=catalog.ObjectRecordSize*700;
             Check(original.AsSpan(PalSaveLayout.PoisonOffset,320).SequenceEqual(edited.AsSpan(PalSaveLayout.PoisonOffset,320)),content+" all320 reserved bytes preserved");

@@ -241,7 +241,7 @@ public sealed class PalResourceCatalog
     public string GetWord(int id, string fallbackPrefix = "对象")
     {
         if (IsChallengeClassicMagic(id)) return ChallengeClassicNames[id - 600];
-        if (IsUniversalTrouble(id)) return "万能麻烦";
+        if (IsUniversalTrouble(id)) return "甄麻烦";
         if (IsChallengeWuhouMagic(id)) return ChallengeWuhouNames[id - 690];
         if (_globalSkillNames.TryGetValue(id, out string? name)) return name;
         if ((uint)id < (uint)_words.Length && !string.IsNullOrWhiteSpace(_words[id]))
@@ -273,7 +273,7 @@ public sealed class PalResourceCatalog
         for (var id = 1; id < limit && result.Count < maximum; id++)
         {
             if (filter is not null && !filter(id)) continue;
-            var name = IsChallengeClassicMagic(id) ? ChallengeClassicNames[id - 600] : IsUniversalTrouble(id) ? "万能麻烦" :
+            var name = IsChallengeClassicMagic(id) ? ChallengeClassicNames[id - 600] : IsUniversalTrouble(id) ? "甄麻烦" :
                 IsChallengeWuhouMagic(id) ? ChallengeWuhouNames[id - 690] : id < _words.Length ? _words[id] : "";
             if (string.IsNullOrWhiteSpace(name))
             {

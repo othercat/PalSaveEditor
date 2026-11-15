@@ -511,7 +511,7 @@ internal sealed class MainForm : Form
         _viewportY.ValueChanged += (_, _) => SetMiscValue(() => _document!.ViewportY = decimal.ToUInt16(_viewportY.Value));
         _music.ValueChanged += (_, _) => SetMiscValue(() => _document!.MusicNumber = decimal.ToUInt16(_music.Value));
         _battleMusic.ValueChanged += (_, _) => SetMiscValue(() => _document!.BattleMusicNumber = decimal.ToUInt16(_battleMusic.Value));
-        _cash.ValueChanged += (_, _) => SetMiscValue(() => _document!.Cash = decimal.ToUInt32(_cash.Value));
+        _cash.ValueChanged += (_, _) => SetMiscValue(() => _document!.CashBalance = decimal.ToInt64(_cash.Value));
         _collect.ValueChanged += (_, _) => SetMiscValue(() => _document!.CollectValue = decimal.ToUInt16(_collect.Value));
     }
 
@@ -862,7 +862,7 @@ internal sealed class MainForm : Form
         _viewportY.Value = _document.ViewportY;
         _music.Value = _document.MusicNumber;
         _battleMusic.Value = _document.BattleMusicNumber;
-        _cash.Value = _document.Cash;
+        _cash.Value = _document.CashBalance;
         _collect.Value = _document.CollectValue;
     }
 
@@ -882,6 +882,7 @@ internal sealed class MainForm : Form
             $"文件长度：{_document.Length:N0} 字节\r\n" +
             $"固定前缀：{eventOffset:N0} 字节\r\n" +
             $"事件记录：{eventCount:N0} × 32 字节\r\n\r\n" +
+            (_document.SwordFlightName is string flight ? $"已学会：{flight}\r\n\r\n" : string.Empty) +
             (EditorEdition.IsGeshi ? $"附加尾部：{_document.Length - _document.Catalog!.ContentProfile!.MinimumSaveLength:N0} 字节（原样保留）\r\n\r\n" : string.Empty) +
             $"识别依据：{_document.Detection.Reason}\r\n" +
             $"证据强度：{(_document.Detection.IsHeuristic ? "长度/边界启发式，可手动复核" : "配套资源复核")}";
@@ -1379,7 +1380,7 @@ internal sealed class MainForm : Form
 
     private static NumericUpDown CreateUIntNumeric() => new()
     {
-        Minimum = 0,
+        Minimum = EditorEdition.IsGeshi ? -(decimal)uint.MaxValue : 0,
         Maximum = uint.MaxValue,
         ThousandsSeparator = true,
         Width = 180,

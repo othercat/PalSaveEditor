@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text;
 
 namespace PalSaveEditor.Core;
 
@@ -111,7 +112,32 @@ public sealed class PalSaveDocument
     public ushort MusicNumber { get => ReadUInt16(PalSaveLayout.MusicNumberOffset); set => WriteUInt16(PalSaveLayout.MusicNumberOffset, value); }
     public ushort BattleMusicNumber { get => ReadUInt16(PalSaveLayout.BattleMusicNumberOffset); set => WriteUInt16(PalSaveLayout.BattleMusicNumberOffset, value); }
     public ushort CollectValue { get => ReadUInt16(PalSaveLayout.CollectValueOffset); set => WriteUInt16(PalSaveLayout.CollectValueOffset, value); }
-    public uint Cash { get => ReadUInt32(PalSaveLayout.CashOffset); set => WriteUInt32(PalSaveLayout.CashOffset, value); }
+    public uint Cash { get => ReadUInt32(PalSaveLayout.CashOffset); set { WriteUInt32(PalSaveLayout.CashOffset, value); if (HasMaintenanceState) WriteUInt32(1544, 0); } }
+    private bool HasMaintenanceState => EditorEdition.IsGeshi && _bytes.Length >= 1584 &&
+        Encoding.ASCII.GetString(_bytes, 1536, 8) == "PALM105\u0001";
+    public string? SwordFlightName => !HasMaintenanceState ? null : ReadUInt16(1556) switch
+    {
+        1 => "御剑飞行残", 3 => "御剑飞行", _ => null
+    };
+    // Refs #12; othercat/sdlpal-lostedit#236. The unsigned native cash field
+    // keeps its old range. Only the SDL extension represents outstanding debt.
+    public long CashBalance
+    {
+        get => Cash != 0 || !HasMaintenanceState ? Cash : -(long)ReadUInt32(1544);
+        set
+        {
+            if (value < -(long)uint.MaxValue || value > uint.MaxValue || (!EditorEdition.IsGeshi && value < 0))
+                throw new ArgumentOutOfRangeException(nameof(value));
+            if (value >= 0) { Cash = (uint)value; return; }
+            if (!HasMaintenanceState)
+            {
+                Array.Clear(_bytes, 1536, 48);
+                Encoding.ASCII.GetBytes("PALM105\u0001").CopyTo(_bytes, 1536);
+            }
+            WriteUInt32(PalSaveLayout.CashOffset, 0);
+            WriteUInt32(1544, (uint)-value);
+        }
+    }
     public int PartyCount
     {
         get => Math.Max(1, Math.Min(PalSaveLayout.PartyCapacity,
