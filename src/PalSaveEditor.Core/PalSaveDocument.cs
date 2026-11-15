@@ -115,6 +115,20 @@ public sealed class PalSaveDocument
     public uint Cash { get => ReadUInt32(PalSaveLayout.CashOffset); set { WriteUInt32(PalSaveLayout.CashOffset, value); if (HasMaintenanceState) WriteUInt32(1544, 0); } }
     private bool HasMaintenanceState => EditorEdition.IsGeshi && _bytes.Length >= 1584 &&
         Encoding.ASCII.GetString(_bytes, 1536, 8) == "PALM105\u0001";
+    // Refs othercat/sdlpal-lostedit#335/#239. Read-only metadata; editing an
+    // unrelated field must preserve the original extension, including errors.
+    public bool PeachVillagePermanentlyOpen => HasMaintenanceState && (ReadUInt32(1548) & 1024) != 0;
+    public string? Ma35StateDescription
+    {
+        get
+        {
+            if (!EditorEdition.IsGeshi || _bytes.Length < 1600 || Encoding.ASCII.GetString(_bytes, 1584, 8) != "PALMA351") return null;
+            int feeds = _bytes[1592], departed = _bytes[1593];
+            if (feeds > 35 || departed > 1 || _bytes[1594] != (byte)(feeds ^ departed ^ 0xa7))
+                return "35麻状态校验无效（保留原字节）";
+            return $"35麻：{feeds}/35；{(departed != 0 ? "已首次出航" : "首次出航前")}{(feeds == 35 ? "；麻烦已离开" : string.Empty)}";
+        }
+    }
     public string? SwordFlightName => !HasMaintenanceState ? null : ReadUInt16(1556) switch
     {
         1 => "御剑飞行残", 3 => "御剑飞行", _ => null

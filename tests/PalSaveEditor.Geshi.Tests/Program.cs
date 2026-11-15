@@ -4,6 +4,11 @@ using System.Globalization;
 using PalSaveEditor.Core;
 
 Console.OutputEncoding = Encoding.UTF8;
+if(args.Length>0 && args[0]=="--r132-state")
+{
+    try{return R132StateTests.Run(args.Skip(1).ToArray());}
+    catch(Exception error){Console.Error.WriteLine(error);return 1;}
+}
 if(args.Length>0 && args[0]=="--r105-debt")
 {
     try{return R105DebtTests.Run(args.Skip(1).ToArray());}

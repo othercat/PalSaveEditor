@@ -883,6 +883,8 @@ internal sealed class MainForm : Form
             $"固定前缀：{eventOffset:N0} 字节\r\n" +
             $"事件记录：{eventCount:N0} × 32 字节\r\n\r\n" +
             (_document.SwordFlightName is string flight ? $"已学会：{flight}\r\n\r\n" : string.Empty) +
+            (_document.Ma35StateDescription is string ma35 ? ma35 + "\r\n\r\n" : string.Empty) +
+            (_document.PeachVillagePermanentlyOpen ? "桃源村入口：永久开放\r\n\r\n" : string.Empty) +
             (EditorEdition.IsGeshi ? $"附加尾部：{_document.Length - _document.Catalog!.ContentProfile!.MinimumSaveLength:N0} 字节（原样保留）\r\n\r\n" : string.Empty) +
             $"识别依据：{_document.Detection.Reason}\r\n" +
             $"证据强度：{(_document.Detection.IsHeuristic ? "长度/边界启发式，可手动复核" : "配套资源复核")}";
