@@ -23,6 +23,9 @@ public sealed record MaintenanceContentProfile(string Id, string Name, int Objec
         .Where(id => id is not (331 or 391)).ToArray();
     private static readonly (MaintenanceContentProfile Profile, string[] Hashes)[] Dreams =
     [
+        (new("pal98-suiji-v02", "完全随机物品 suiji v0.2", 565, 5077, 104, ClassicItems, ClassicMagics,
+            PalSaveLayout.WinObjectRecordSize),
+            ["6942e4dc7554c4d940db20efa370d460b0ec7ac11c27e52f65c754fe161b88b6", "c0bc968e5322b06fe669dd6e34483dd1f12dd223ac25b03b6dc74d3742635c1b", "be56e77c7ecd61306133913a1987b1dddf656528ae870c2de1ee8ccda7ff3ebf", "37a25b2e1c16e00d492047f349fcb9a302f0151c9ba63b3d36858e8b526ca5ef"]),
         (new("pal-dos", "仙剑DOS原版", 565, 5332, 104, ClassicItems, ClassicMagics),
             ["8ebbbcfa5bdae5fe6b73752e3a6e6d3fd28d6fa857ffefcb6c8c0242eaf0252c", "d9e82696a42d93f9623c63714a68a12645c7d650776eaa8510ec27b7c35e819a", "cd93fb4cffd679dcbcfeb3950fda5644042d8971ceb13ff7ad0baef938fa55f5", "b5d6b0fc82f6369368740aaba0a9dd061f87a1653f8b4c5724b5d16385730413"]),
         (new("pal98-classic-v6", "98柔情经典速通v6", 565, 5077, 431, ClassicItems, ClassicMagics,
