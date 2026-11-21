@@ -9,7 +9,7 @@ internal static class GameplayRuleTests
     internal static int Run(string[] args)
     {
         if (!EditorEdition.IsGeshi || args.Length != 2 || Directory.Exists(args[1]))
-            throw new ArgumentException("--gameplay-rules native-20-snapshot-root fresh-output");
+            throw new ArgumentException("--gameplay-rules native-22-snapshot-root fresh-output");
         int checks = 0, contents = 0;
         void Check(bool ok, string label) { if (!ok) throw new Exception(label); checks++; Console.WriteLine("PASS " + label); }
         void Reject(Action action, string label)
@@ -55,7 +55,7 @@ internal static class GameplayRuleTests
             void Selection() => File.WriteAllText(selection, JsonSerializer.Serialize(fields));
             Selection(); Reject(() => standalone.Save(), id + " selection presence is part of the open-document binding");
             var bound = PalSaveDocument.Load(save); var binding = bound.Catalog!.GameplayBinding!;
-            Check(binding.RuleId == (string)fields["gameplay_rule_id"]! && binding.Sha256 == (string)fields["gameplay_rule_sha256"]! && binding.Revision == 1,
+            Check(binding.RuleId == (string)fields["gameplay_rule_id"]! && binding.Sha256 == (string)fields["gameplay_rule_sha256"]! && binding.Revision == (int)fields["gameplay_rule_revision"]!,
                 id + " editor identity matches the actual native engine");
             bound.Cash = uint.MaxValue; bound.Save();
             var edited = (byte[])bytes.Clone(); BinaryPrimitives.WriteUInt32LittleEndian(edited.AsSpan(40,4), uint.MaxValue);
@@ -72,7 +72,7 @@ internal static class GameplayRuleTests
                 fields["gameplay_rule_revision"] = value; Selection();
                 Reject(() => bound.Save(), id + " noncanonical revision rejected " + value);
             }
-            fields["gameplay_rule_revision"] = 1; Selection();
+            fields["gameplay_rule_revision"] = native.GetProperty("gameplayRuleRevision").GetInt32(); Selection();
             string goodSelection = File.ReadAllText(selection);
             File.WriteAllText(selection, "{\"gameplay_rule_revision\":1," + goodSelection.Substring(1));
             Reject(() => bound.Save(), id + " duplicate selection property rejected"); Selection();
@@ -123,7 +123,7 @@ internal static class GameplayRuleTests
             Check(File.ReadAllBytes(Path.Combine(source, "pal", "GAMEPLAY.INI")).SequenceEqual(ruleBytes), id + " native input bytes preserved");
             oldRoots.Add(root);
         }
-        Check(contents == 20, "all twenty content contracts exercised");
+        Check(contents == 22, "all 22 content contracts exercised");
         Console.WriteLine("PASS gameplay rules contents=" + contents + " checks=" + checks); return 0;
     }
 }
